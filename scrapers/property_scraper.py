@@ -8,6 +8,8 @@ import logging
 from typing import Optional, Dict, List, Any
 from urllib.parse import urlencode, quote
 
+from bs4 import BeautifulSoup
+
 from .base import BaseScraper, NotFoundException, ScraperException, BlockedException
 from .utils import (
     extract_json_from_script,
@@ -17,6 +19,8 @@ from .utils import (
     clean_number,
     clean_text,
     build_search_url,
+    extract_broad_location,
+    slugify_location,
 )
 
 logger = logging.getLogger(__name__)
@@ -148,7 +152,7 @@ class PropertyScraper(BaseScraper):
                     if key in obj and isinstance(obj[key], (int, str)):
                         try:
                             val = int(obj[key])
-                            if val > 100:  # Sanity check - unlikely to be < 100 for broad searches
+                            if val > 0:  # Accept any positive count
                                 return val
                         except:
                             pass
@@ -326,8 +330,16 @@ class PropertyScraper(BaseScraper):
         """
         Search properties by location.
         
+        Handles:
+        - Location slugs ("seattle-wa")
+        - Full addresses ("35 Morse Ave Bloomfield, NJ 07003") 
+          → may redirect to /homedetails/ for exact match
+        - Broad locations ("Bloomfield NJ")
+        
+        If an exact address returns 404, falls back to a broader city+state search.
+        
         Args:
-            location: Location slug (e.g., "seattle-wa")
+            location: Location string
             list_type: 'for-sale', 'for-rent', or 'sold'
             page: Page number
             **filters: Additional search filters
@@ -335,25 +347,62 @@ class PropertyScraper(BaseScraper):
         Returns:
             Dict with 'results', 'total_results', and 'current_page'
         """
-        # Build URL
         url = build_search_url(location, list_type, page)
         
         try:
-            soup = self.get_soup(url)
-            parsed = self._parse_search_results(soup)
-            
-            if not parsed.get('results'):
-                raise NotFoundException(f"No properties found for location: {location}")
-            
-            # Add current page to the response
-            parsed['current_page'] = page
-            return parsed
-            
+            return self._fetch_and_parse_location(url, location, list_type, page)
         except NotFoundException:
+            # If the exact address 404'd, try a broader location (city + state)
+            broad = extract_broad_location(location)
+            broad_slug = slugify_location(location)
+            if broad != broad_slug:
+                logger.info(f"Exact address not found, trying broader location: {broad}")
+                broad_url = build_search_url(broad, list_type, page)
+                try:
+                    return self._fetch_and_parse_location(broad_url, broad, list_type, page)
+                except NotFoundException:
+                    raise NotFoundException(f"No properties found for location: {location}")
             raise
         except Exception as e:
             logger.error(f"Failed to search by location: {e}")
             raise ScraperException(f"Failed to search properties: {e}")
+    
+    def _fetch_and_parse_location(
+        self,
+        url: str,
+        location: str,
+        list_type: str,
+        page: int
+    ) -> Dict[str, Any]:
+        """
+        Fetch a Zillow URL and parse results.
+        Handles redirects to /homedetails/ for exact address matches.
+        """
+        # Use self.get() instead of get_soup() to access response.url (final URL after redirects)
+        response = self.get(url)
+        final_url = response.url
+        soup = BeautifulSoup(response.text, 'lxml')
+        
+        # If Zillow redirected to a property detail page, parse it as a single property
+        if '/homedetails/' in final_url:
+            logger.info(f"Redirected to property detail: {final_url}")
+            property_data = self._parse_property_details(soup, final_url)
+            if property_data:
+                return {
+                    'results': [property_data],
+                    'total_results': 1,
+                    'current_page': 1
+                }
+            raise NotFoundException(f"No property details found at: {final_url}")
+        
+        # Normal search results page
+        parsed = self._parse_search_results(soup)
+        
+        if not parsed.get('results'):
+            raise NotFoundException(f"No properties found for location: {location}")
+        
+        parsed['current_page'] = page
+        return parsed
     
     def search_by_coordinates(
         self,

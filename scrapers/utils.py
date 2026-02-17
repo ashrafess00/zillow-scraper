@@ -292,6 +292,106 @@ def parse_review(review_data: Dict) -> Optional[Dict]:
         return None
 
 
+
+def slugify_location(location: str) -> str:
+    """
+    Convert a free-form location string into a Zillow-compatible URL slug.
+    
+    Examples:
+        "35 Morse Ave Bloomfield, NJ 07003" -> "35-Morse-Ave-Bloomfield-NJ-07003"
+        "Bloomfield NJ" -> "Bloomfield-NJ"
+        "seattle-wa" -> "seattle-wa" (already slugified)
+        "Los Angeles, CA" -> "Los-Angeles-CA"
+    """
+    if not location:
+        return location
+    
+    # Remove commas, periods, and hash signs
+    slug = location.replace(',', '').replace('.', '').replace('#', '')
+    # Replace spaces with hyphens
+    slug = slug.replace(' ', '-')
+    # Collapse multiple hyphens
+    while '--' in slug:
+        slug = slug.replace('--', '-')
+    # Strip leading/trailing hyphens
+    slug = slug.strip('-')
+    
+    return slug
+
+
+def extract_broad_location(location: str) -> str:
+    """
+    Extract a broader location (city + state) from a full address string.
+    
+    Examples:
+        "35 Morse Ave Bloomfield, NJ 07003" -> "Bloomfield-NJ"
+        "123 Main St, Los Angeles, CA 90001" -> "Los-Angeles-CA"
+        "Bloomfield NJ" -> "Bloomfield-NJ" (returned as-is, slugified)
+    
+    Heuristic: uses comma-splitting and street suffix detection to isolate
+    the city name from the street address.
+    """
+    import re
+    
+    # Common US street suffixes (used to detect where street name ends and city begins)
+    STREET_SUFFIXES = {
+        'ave', 'avenue', 'blvd', 'boulevard', 'cir', 'circle', 'ct', 'court',
+        'dr', 'drive', 'hwy', 'highway', 'ln', 'lane', 'loop', 'pass',
+        'path', 'pike', 'pl', 'place', 'rd', 'road', 'run', 'sq', 'square',
+        'st', 'street', 'ter', 'terrace', 'trl', 'trail', 'way', 'xing',
+    }
+    
+    # Common US state abbreviations
+    state_pattern = r'\b([A-Z]{2})\b'
+    
+    # Try to find state abbreviation
+    match = re.search(state_pattern, location)
+    if match:
+        state = match.group(1)
+        # Get everything before the state
+        before_state = location[:match.start()].strip().rstrip(',').strip()
+        
+        # Split by comma to find city
+        parts = [p.strip() for p in before_state.split(',')]
+        
+        if len(parts) >= 2:
+            # Multi-comma format: "123 Main St, Los Angeles, CA 90001"
+            # The last comma-separated part before state is the city
+            city = parts[-1]
+            # If city still has a number prefix (unlikely but possible), strip it
+            if city and city[0].isdigit():
+                city = parts[-1]
+        else:
+            # Single part: "35 Morse Ave Bloomfield" (street + city combined)
+            # Find the last street suffix and take everything AFTER it as the city
+            words = parts[0].split()
+            city_start_idx = 0
+            
+            for i, w in enumerate(words):
+                if w.lower().rstrip('.') in STREET_SUFFIXES:
+                    city_start_idx = i + 1  # City starts AFTER the suffix
+            
+            if city_start_idx > 0 and city_start_idx < len(words):
+                city = ' '.join(words[city_start_idx:])
+            elif words and words[0][0:1].isdigit():
+                # No street suffix found but starts with number - take last word(s) as city
+                # Skip the initial number
+                non_number_words = []
+                for w in reversed(words):
+                    if w[0].isdigit():
+                        break
+                    non_number_words.insert(0, w)
+                city = ' '.join(non_number_words) if non_number_words else parts[0]
+            else:
+                city = parts[0]
+        
+        if city:
+            return slugify_location(f"{city}, {state}")
+    
+    # Fallback: just slugify the whole thing
+    return slugify_location(location)
+
+
 def build_search_url(
     location: str = None,
     list_type: str = 'for-sale',
@@ -302,7 +402,7 @@ def build_search_url(
     Build a Zillow search URL with filters.
     
     Args:
-        location: Location string (e.g., "seattle-wa")
+        location: Location string (e.g., "seattle-wa" or "35 Morse Ave Bloomfield, NJ 07003")
         list_type: Type of listing (for-sale, for-rent, sold)
         page: Page number
         **filters: Additional filters
@@ -313,7 +413,8 @@ def build_search_url(
     base = "https://www.zillow.com"
     
     if location:
-        path = f"/{location}/"
+        slug = slugify_location(location)
+        path = f"/{slug}/"
     else:
         path = "/homes/"
     
