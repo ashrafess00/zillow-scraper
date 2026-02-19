@@ -157,6 +157,11 @@ def parse_property_card(card_data: Dict) -> Optional[Dict]:
     """
     Parse property data from a Zillow listing card.
     
+    Handles multiple Zillow JSON formats:
+    - For-sale: lat/lng in latLong dict or hdpData.homeInfo
+    - For-rent: price/beds in units array, lat/lng in latLong dict
+    - Sold: various legacy field names
+    
     Args:
         card_data: Dictionary containing property card data
         
@@ -188,25 +193,76 @@ def parse_property_card(card_data: Dict) -> Optional[Dict]:
                     card_data.get('image_url') or 
                     card_data.get('medium_image_url', ''))
         
-        # Handle sqft - multiple possible field names
+        # --- Extract hdpData.homeInfo for fallback fields ---
+        home_info = {}
+        hdp = card_data.get('hdpData')
+        if isinstance(hdp, dict):
+            home_info = hdp.get('homeInfo', {}) or {}
+        
+        # --- Handle lat/lng ---
+        # Priority: latLong dict > flat latitude/longitude > hdpData.homeInfo
+        lat = None
+        lng = None
+        
+        lat_long = card_data.get('latLong')
+        if isinstance(lat_long, dict):
+            lat = lat_long.get('latitude')
+            lng = lat_long.get('longitude')
+        
+        if lat is None:
+            lat = card_data.get('latitude') or home_info.get('latitude')
+        if lng is None:
+            lng = card_data.get('longitude') or home_info.get('longitude')
+        
+        # --- Handle price ---
+        price = clean_price(card_data.get('price') or card_data.get('unformattedPrice'))
+        
+        # --- Handle beds, baths, sqft ---
+        beds = card_data.get('beds') or card_data.get('bedrooms') or home_info.get('bedrooms')
+        baths = card_data.get('baths') or card_data.get('bathrooms') or home_info.get('bathrooms')
         sqft = (card_data.get('area') or 
                card_data.get('livingArea') or 
-               card_data.get('livingAreaValue'))
+               card_data.get('livingAreaValue') or
+               home_info.get('livingArea'))
         
-        # Handle status - for sold properties, use sold_date
+        # --- Handle rental units (for-rent apartment listings) ---
+        units = card_data.get('units')
+        if isinstance(units, list) and units:
+            # Extract min price from units if top-level price is missing
+            if price is None:
+                unit_prices = []
+                for unit in units:
+                    up = clean_price(unit.get('price'))
+                    if up is not None:
+                        unit_prices.append(up)
+                if unit_prices:
+                    price = min(unit_prices)
+            
+            # Extract beds range from units if missing
+            if beds is None:
+                unit_beds = []
+                for unit in units:
+                    try:
+                        b = int(unit.get('beds', 0))
+                        unit_beds.append(b)
+                    except (ValueError, TypeError):
+                        pass
+                if unit_beds:
+                    beds = min(unit_beds)
+        
+        # --- Handle status ---
         status = (card_data.get('statusType') or 
                  card_data.get('status') or 
                  card_data.get('home_marketing_status') or
                  card_data.get('sold_date', ''))
         
-        # Handle brokerage - multiple possible field names and nested structures
+        # --- Handle brokerage ---
         brokerage = (card_data.get('brokerage_name') or
                     card_data.get('brokerName') or
                     card_data.get('brokerageName') or
                     card_data.get('listingProvider') or
                     '')
         
-        # Check nested attributionInfo
         if not brokerage:
             attribution = card_data.get('attributionInfo', {})
             if isinstance(attribution, dict):
@@ -214,24 +270,26 @@ def parse_property_card(card_data: Dict) -> Optional[Dict]:
                             attribution.get('agentName') or
                             attribution.get('listingOffice', ''))
         
-        # Handle zpid - Zillow uses "lat--lng" composite IDs for some rentals (apartments/buildings)
+        # --- Handle property type ---
+        property_type = (card_data.get('propertyType') or 
+                        card_data.get('home_type', '') or
+                        home_info.get('homeType', ''))
+        
+        # --- Handle zpid ---
+        # Zillow uses "lat--lng" composite IDs for some rentals (apartments/buildings)
         raw_zpid = card_data.get('zpid')
         zpid = None
-        lat = card_data.get('latitude')
-        lng = card_data.get('longitude')
         
         if raw_zpid is not None:
             raw_str = str(raw_zpid)
-            # Check if it's a lat--lng composite (e.g., "47.59941--122.32883")
             if '--' in raw_str:
+                # Composite lat--lng zpid — extract coords if not already set
                 parts = raw_str.split('--')
                 if len(parts) == 2:
                     try:
                         if lat is None:
                             lat = float(parts[0])
                         if lng is None:
-                            # The '--' separator means the second part is typically a positive
-                            # number representing a negative longitude (west)
                             lng_val = parts[1]
                             lng = float(f"-{lng_val}") if not lng_val.startswith('-') else float(lng_val)
                     except (ValueError, IndexError):
@@ -239,7 +297,7 @@ def parse_property_card(card_data: Dict) -> Optional[Dict]:
                 zpid = extract_zpid_from_url(url)
             else:
                 try:
-                    zpid = int(float(raw_str))  # Handle "12345" or "12345.0"
+                    zpid = int(float(raw_str))
                 except (ValueError, TypeError):
                     zpid = extract_zpid_from_url(url)
         else:
@@ -250,11 +308,11 @@ def parse_property_card(card_data: Dict) -> Optional[Dict]:
             'address': address,
             'url': url,
             'photo_url': photo_url,
-            'price': clean_price(card_data.get('price') or card_data.get('unformattedPrice')),
-            'beds': card_data.get('beds') or card_data.get('bedrooms'),
-            'baths': card_data.get('baths') or card_data.get('bathrooms'),
+            'price': price,
+            'beds': beds,
+            'baths': baths,
             'sqft': sqft,
-            'property_type': card_data.get('propertyType') or card_data.get('home_type', ''),
+            'property_type': property_type,
             'status': status,
             'latitude': lat,
             'longitude': lng,
