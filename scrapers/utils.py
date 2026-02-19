@@ -275,6 +275,13 @@ def parse_property_card(card_data: Dict) -> Optional[Dict]:
                         card_data.get('home_type', '') or
                         home_info.get('homeType', ''))
         
+        # Infer property type for rentals that don't have it
+        if not property_type:
+            if card_data.get('isBuilding') or card_data.get('buildingName'):
+                property_type = 'APARTMENT'
+            elif card_data.get('statusType') == 'FOR_RENT':
+                property_type = 'RENTAL'
+        
         # --- Handle zpid ---
         # Zillow uses "lat--lng" composite IDs for some rentals (apartments/buildings)
         raw_zpid = card_data.get('zpid')
