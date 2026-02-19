@@ -26,15 +26,23 @@ def custom_exception_handler(exc, context):
     
     # Handle scraper-specific exceptions (expected errors - minimal logging)
     if isinstance(exc, NotFoundException):
-        # Expected error - just log a simple warning, no stack trace
-        logger.info(f"404: {exc}")
+        # Return 200 with empty results — the request succeeded but found nothing
+        logger.info(f"No results: {exc}")
         return Response(
             {
-                'error': 'Not Found',
+                'count': 0,
+                'results': [],
                 'message': str(exc),
-                'status_code': 404,
+                'pagination': {
+                    'total_results': 0,
+                    'total_pages': 0,
+                    'current_page': 1,
+                    'per_page': 40,
+                    'has_next': False,
+                    'has_previous': False,
+                },
             },
-            status=status.HTTP_404_NOT_FOUND
+            status=status.HTTP_200_OK
         )
     
     if isinstance(exc, BlockedException):

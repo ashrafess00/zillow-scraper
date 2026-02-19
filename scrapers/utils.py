@@ -214,8 +214,39 @@ def parse_property_card(card_data: Dict) -> Optional[Dict]:
                             attribution.get('agentName') or
                             attribution.get('listingOffice', ''))
         
+        # Handle zpid - Zillow uses "lat--lng" composite IDs for some rentals (apartments/buildings)
+        raw_zpid = card_data.get('zpid')
+        zpid = None
+        lat = card_data.get('latitude')
+        lng = card_data.get('longitude')
+        
+        if raw_zpid is not None:
+            raw_str = str(raw_zpid)
+            # Check if it's a lat--lng composite (e.g., "47.59941--122.32883")
+            if '--' in raw_str:
+                parts = raw_str.split('--')
+                if len(parts) == 2:
+                    try:
+                        if lat is None:
+                            lat = float(parts[0])
+                        if lng is None:
+                            # The '--' separator means the second part is typically a positive
+                            # number representing a negative longitude (west)
+                            lng_val = parts[1]
+                            lng = float(f"-{lng_val}") if not lng_val.startswith('-') else float(lng_val)
+                    except (ValueError, IndexError):
+                        pass
+                zpid = extract_zpid_from_url(url)
+            else:
+                try:
+                    zpid = int(float(raw_str))  # Handle "12345" or "12345.0"
+                except (ValueError, TypeError):
+                    zpid = extract_zpid_from_url(url)
+        else:
+            zpid = extract_zpid_from_url(url)
+        
         return {
-            'zpid': card_data.get('zpid') or extract_zpid_from_url(url),
+            'zpid': zpid,
             'address': address,
             'url': url,
             'photo_url': photo_url,
@@ -225,8 +256,8 @@ def parse_property_card(card_data: Dict) -> Optional[Dict]:
             'sqft': sqft,
             'property_type': card_data.get('propertyType') or card_data.get('home_type', ''),
             'status': status,
-            'latitude': card_data.get('latitude'),
-            'longitude': card_data.get('longitude'),
+            'latitude': lat,
+            'longitude': lng,
             'brokerage': brokerage,
         }
     except Exception as e:
