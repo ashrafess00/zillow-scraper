@@ -130,7 +130,7 @@ def agent_info(request):
     if not agentname and not url:
         return Response(
             {'error': 'Bad Request', 'message': 'Either agentname or url is required', 'status_code': 400},
-            status=status.HTTP_400_BAD_REQUEST
+            status=status.HTTP_200_OK
         )
     
     result = agent_scraper.get_agent_info(agentname=agentname, url=url)
@@ -177,7 +177,7 @@ def agent_reviews(request):
     if not agentname and not url:
         return Response(
             {'error': 'Bad Request', 'message': 'Either agentname or url is required', 'status_code': 400},
-            status=status.HTTP_400_BAD_REQUEST
+            status=status.HTTP_200_OK
         )
     
     result = agent_scraper.get_agent_reviews(agentname=agentname, url=url, page=page)
@@ -226,7 +226,7 @@ def agent_for_sale_properties(request):
     if not agentname and not url:
         return Response(
             {'error': 'Bad Request', 'message': 'Either agentname or url is required', 'status_code': 400},
-            status=status.HTTP_400_BAD_REQUEST
+            status=status.HTTP_200_OK
         )
     
     result = agent_scraper.get_agent_properties(
@@ -277,7 +277,7 @@ def agent_for_rent_properties(request):
     if not agentname and not url:
         return Response(
             {'error': 'Bad Request', 'message': 'Either agentname or url is required', 'status_code': 400},
-            status=status.HTTP_400_BAD_REQUEST
+            status=status.HTTP_200_OK
         )
     
     result = agent_scraper.get_agent_properties(
@@ -328,7 +328,7 @@ def agent_sold_properties(request):
     if not agentname and not url:
         return Response(
             {'error': 'Bad Request', 'message': 'Either agentname or url is required', 'status_code': 400},
-            status=status.HTTP_400_BAD_REQUEST
+            status=status.HTTP_200_OK
         )
     
     result = agent_scraper.get_agent_properties(
@@ -454,7 +454,7 @@ def by_coordinates(request):
     if not lat or not lng:
         return Response(
             {'error': 'Bad Request', 'message': 'lat and lng are required', 'status_code': 400},
-            status=status.HTTP_400_BAD_REQUEST
+            status=status.HTTP_200_OK
         )
     
     try:
@@ -463,7 +463,7 @@ def by_coordinates(request):
     except ValueError:
         return Response(
             {'error': 'Bad Request', 'message': 'lat and lng must be valid numbers', 'status_code': 400},
-            status=status.HTTP_400_BAD_REQUEST
+            status=status.HTTP_200_OK
         )
     
     list_type = request.query_params.get('listType', 'for-sale')
@@ -511,7 +511,7 @@ def by_map_bounds(request):
     if not all([north, south, east, west]):
         return Response(
             {'error': 'Bad Request', 'message': 'north, south, east, and west are required', 'status_code': 400},
-            status=status.HTTP_400_BAD_REQUEST
+            status=status.HTTP_200_OK
         )
     
     try:
@@ -522,7 +522,7 @@ def by_map_bounds(request):
     except ValueError:
         return Response(
             {'error': 'Bad Request', 'message': 'Bounds must be valid numbers', 'status_code': 400},
-            status=status.HTTP_400_BAD_REQUEST
+            status=status.HTTP_200_OK
         )
     
     list_type = request.query_params.get('listType', 'for-sale')
@@ -564,7 +564,7 @@ def by_mls_id(request):
     if not mls_id:
         return Response(
             {'error': 'Bad Request', 'message': 'mlsid is required', 'status_code': 400},
-            status=status.HTTP_400_BAD_REQUEST
+            status=status.HTTP_200_OK
         )
     
     page = int(request.query_params.get('page', 1))
@@ -608,7 +608,7 @@ def by_polygon(request):
     if not polygon:
         return Response(
             {'error': 'Bad Request', 'message': 'polygon is required', 'status_code': 400},
-            status=status.HTTP_400_BAD_REQUEST
+            status=status.HTTP_200_OK
         )
     
     list_type = request.query_params.get('listType', 'for-sale')
@@ -648,7 +648,7 @@ def by_url(request):
     if not url:
         return Response(
             {'error': 'Bad Request', 'message': 'url is required', 'status_code': 400},
-            status=status.HTTP_400_BAD_REQUEST
+            status=status.HTTP_200_OK
         )
     
     result = property_scraper.search_by_url(url=url)
@@ -691,7 +691,7 @@ def apartment_details(request):
     if not url:
         return Response(
             {'error': 'Bad Request', 'message': 'url is required', 'status_code': 400},
-            status=status.HTTP_400_BAD_REQUEST
+            status=status.HTTP_200_OK
         )
     
     details = property_scraper.get_apartment_details(url=url)
@@ -719,7 +719,7 @@ def autocomplete(request):
     if not query:
         return Response(
             {'error': 'Bad Request', 'message': 'q is required', 'status_code': 400},
-            status=status.HTTP_400_BAD_REQUEST
+            status=status.HTTP_200_OK
         )
     
     suggestions = property_scraper.autocomplete(query=query)
