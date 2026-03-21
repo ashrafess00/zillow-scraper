@@ -13,6 +13,7 @@ django-redis>=5.4,<6.0
 
 # Web Scraping
 requests>=2.31,<3.0
+curl-cffi>=0.7,<1.0
 beautifulsoup4>=4.12,<5.0
 lxml>=5.0,<6.0
 fake-useragent>=1.4,<2.0

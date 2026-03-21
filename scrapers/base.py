@@ -8,7 +8,8 @@ import logging
 from typing import Optional, Dict, Any
 from urllib.parse import urljoin
 
-import requests
+from curl_cffi import requests
+from curl_cffi.requests.errors import RequestsError
 from bs4 import BeautifulSoup
 from django.conf import settings
 
@@ -105,21 +106,21 @@ class BaseScraper:
         if retry_count > 0:
             self._delay()
         
-        headers = self._get_headers()
+        # headers = self._get_headers() # Removed: curl_cffi requires its own specific headers to match the TLS signature
         proxies = proxy_manager.get_proxy() if use_proxy else None
         
         try:
-            # Use requests directly (not session) for fresh connections
-            # This allows rotating proxy to provide new IP per request
+            # Use curl_cffi directly to impersonate a browser's TLS signature
             response = requests.request(
                 method=method,
                 url=url,
                 params=params,
                 data=data,
                 json=json_data,
-                headers=headers,
+                # headers=headers, # Do not pass conflicting headers 
                 proxies=proxies,
                 timeout=self.timeout,
+                impersonate="chrome"
             )
             
             # Check for blocking
@@ -140,7 +141,7 @@ class BaseScraper:
             
             return response
             
-        except (requests.exceptions.RequestException, BlockedException) as e:
+        except (RequestsError, BlockedException) as e:
             # Mark proxy as failed
             if proxies:
                 proxy_manager.mark_proxy_failed(proxies.get('http', ''))
