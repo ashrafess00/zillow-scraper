@@ -763,7 +763,7 @@ class AgentScraper(BaseScraper):
         
         try:
             # Add delay to avoid rate limits
-            self._delay()
+            # self._delay()
             
             logger.info(f"Fetching properties from API: {api_url} with params {params}")
             # Use _make_request from BaseScraper
@@ -798,35 +798,16 @@ class AgentScraper(BaseScraper):
         Returns:
             Dict with 'results' and metadata
         """
-        type_paths = {
-            'for-sale': '/listings/for-sale/',
-            'for-rent': '/listings/for-rent/',
-            'sold': '/listings/sold/',
-        }
-        
-        path = type_paths.get(property_type, '/listings/for-sale/')
-        
         if url:
-            profile_url = url.rstrip('/') + path
+            # Strip any /listings/... path from the URL to ensure we hit the main profile
+            profile_url = re.sub(r'/listings/.*$', '', url.rstrip('/')) + '/'
         elif agentname:
-            profile_url = f"{self.BASE_URL}/profile/{agentname}{path}"
+            profile_url = f"{self.BASE_URL}/profile/{agentname}/"
         else:
             raise ValueError("Either agentname or url must be provided")
-            
-        if page > 1:
-            profile_url = f"{profile_url}?page={page}"
         
         try:
-            try:
-                soup = self.get_soup(profile_url)
-            except (NotFoundException, ScraperException) as e:
-                # Fallback to main profile page if specific listings page fails (404 or 403)
-                if url:
-                    profile_url = url
-                elif agentname:
-                    profile_url = f"{self.BASE_URL}/profile/{agentname}/"
-                logger.info(f"Listings page failed ({e}), falling back to main profile: {profile_url}")
-                soup = self.get_soup(profile_url)
+            soup = self.get_soup(profile_url)
 
             properties = []
             total_properties = 0
