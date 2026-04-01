@@ -33,3 +33,4 @@ pytest-django>=4.7,<5.0
 
 # Production
 gunicorn>=21.0,<22.0
+httpx

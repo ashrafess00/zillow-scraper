@@ -32,7 +32,7 @@ INSTALLED_APPS = [
     # Local apps
     'api',
     'core',
-    'scrapers',
+    'scrapers.apps.ScrapersConfig',
 ]
 
 MIDDLEWARE = [

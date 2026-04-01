@@ -5,6 +5,7 @@ Base scraper class with common functionality.
 import time
 import random
 import logging
+import threading
 from typing import Optional, Dict, Any
 from urllib.parse import urljoin
 
@@ -34,19 +35,117 @@ class NotFoundException(ScraperException):
     pass
 
 
+class SessionPool:
+    """
+    Manages a pool of warm curl_cffi Sessions.
+    
+    Key insight: curl_cffi's first request takes ~10s due to TLS handshake +
+    PerimeterX challenge cookie generation. Subsequent requests on the same
+    session take ~1.3s because TLS tickets and cookies are cached.
+    
+    This pool pre-warms sessions and reuses them across Django requests.
+    """
+    
+    _instance = None
+    _lock = threading.Lock()
+    
+    def __new__(cls):
+        if cls._instance is None:
+            with cls._lock:
+                if cls._instance is None:
+                    cls._instance = super().__new__(cls)
+                    cls._instance._initialized = False
+        return cls._instance
+    
+    def __init__(self):
+        if self._initialized:
+            return
+        self._initialized = True
+        self._session = None
+        self._session_lock = threading.Lock()
+        self._request_count = 0
+        # Refresh session after N requests to avoid stale cookies
+        self._max_requests_per_session = 50
+        logger.info("SessionPool initialized")
+    
+    def _create_session(self) -> requests.Session:
+        """Create and pre-warm a new curl_cffi session."""
+        proxies = proxy_manager.get_proxy()
+        
+        session = requests.Session()
+        
+        # Pre-warm: hit Zillow homepage to establish TLS + get challenge cookies
+        try:
+            logger.info("Pre-warming session against Zillow...")
+            t0 = time.time()
+            resp = session.get(
+                "https://www.zillow.com/",
+                impersonate="chrome",
+                proxies=proxies,
+                timeout=30,
+            )
+            elapsed = time.time() - t0
+            logger.info(
+                f"Session pre-warmed in {elapsed:.2f}s "
+                f"(HTTP {resp.status_code}, {len(resp.content)} bytes)"
+            )
+        except Exception as e:
+            logger.warning(f"Session pre-warm failed: {e} (will use cold session)")
+        
+        return session
+    
+    def get_session(self) -> requests.Session:
+        """Get a warm session, creating/refreshing if needed."""
+        with self._session_lock:
+            if (
+                self._session is None 
+                or self._request_count >= self._max_requests_per_session
+            ):
+                # Close old session if exists
+                if self._session is not None:
+                    try:
+                        self._session.close()
+                    except Exception:
+                        pass
+                    logger.info(
+                        f"Refreshing session after {self._request_count} requests"
+                    )
+                
+                self._session = self._create_session()
+                self._request_count = 0
+            
+            self._request_count += 1
+            return self._session
+    
+    def invalidate(self):
+        """Force-refresh the session (e.g., after repeated blocks)."""
+        with self._session_lock:
+            if self._session is not None:
+                try:
+                    self._session.close()
+                except Exception:
+                    pass
+            self._session = None
+            self._request_count = 0
+            logger.info("Session invalidated, will re-warm on next request")
+
+
+# Module-level singleton
+session_pool = SessionPool()
+
+
 class BaseScraper:
     """
     Base scraper class with proxy rotation, user-agent rotation,
     request delays, and retry logic.
+    
+    Uses a persistent warm curl_cffi Session for fast requests (~1.3s)
+    instead of cold one-shot requests (~10s).
     """
     
     BASE_URL = "https://www.zillow.com"
     
     def __init__(self):
-        # Don't use a persistent session - create fresh connections
-        # This allows rotating proxies to give new IPs per request
-        self.use_session = False
-        
         scraper_settings = getattr(settings, 'SCRAPER_SETTINGS', {})
         self.delay_min = scraper_settings.get('REQUEST_DELAY_MIN', 1.0)
         self.delay_max = scraper_settings.get('REQUEST_DELAY_MAX', 3.0)
@@ -60,7 +159,6 @@ class BaseScraper:
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
             'Accept-Language': 'en-US,en;q=0.5',
             'Accept-Encoding': 'gzip, deflate, br',
-            'Connection': 'close',  # Don't keep connection alive for rotating proxy
             'Upgrade-Insecure-Requests': '1',
             'Sec-Fetch-Dest': 'document',
             'Sec-Fetch-Mode': 'navigate',
@@ -86,7 +184,7 @@ class BaseScraper:
         retry_count: int = 0,
     ) -> requests.Response:
         """
-        Make an HTTP request with retry logic.
+        Make an HTTP request using the warm session pool.
         
         Args:
             url: Target URL
@@ -106,18 +204,16 @@ class BaseScraper:
         if retry_count > 0:
             self._delay()
         
-        # headers = self._get_headers() # Removed: curl_cffi requires its own specific headers to match the TLS signature
         proxies = proxy_manager.get_proxy() if use_proxy else None
+        session = session_pool.get_session()
         
         try:
-            # Use curl_cffi directly to impersonate a browser's TLS signature
-            response = requests.request(
+            response = session.request(
                 method=method,
                 url=url,
                 params=params,
                 data=data,
                 json=json_data,
-                # headers=headers, # Do not pass conflicting headers 
                 proxies=proxies,
                 timeout=self.timeout,
                 impersonate="chrome"
@@ -145,6 +241,10 @@ class BaseScraper:
             # Mark proxy as failed
             if proxies:
                 proxy_manager.mark_proxy_failed(proxies.get('http', ''))
+            
+            # On repeated blocks, invalidate the session to force re-warm
+            if retry_count >= 2:
+                session_pool.invalidate()
             
             if retry_count < self.max_retries:
                 logger.warning(

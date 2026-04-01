@@ -9,6 +9,8 @@ import logging
 from typing import Optional, Dict, List, Any
 from urllib.parse import quote
 
+from django.core.cache import cache
+
 from .base import BaseScraper, NotFoundException, ScraperException
 from .utils import (
     extract_json_from_script,
@@ -19,6 +21,9 @@ from .utils import (
 )
 
 logger = logging.getLogger(__name__)
+
+# ZUID cache timeout: 30 days (ZUIDs are permanent identifiers)
+ZUID_CACHE_TIMEOUT = 60 * 60 * 24 * 30
 
 
 class AgentScraper(BaseScraper):
@@ -779,6 +784,34 @@ class AgentScraper(BaseScraper):
         return {}
 
 
+    def _get_agent_slug(self, agentname: str = None, url: str = None) -> str:
+        """Extract agent slug from agentname or URL for cache key."""
+        if agentname:
+            return agentname.lower().strip()
+        if url:
+            # Extract slug from URL like /profile/Pardee-Properties/
+            match = re.search(r'/profile/([^/]+)', url)
+            if match:
+                return match.group(1).lower().strip()
+        return ''
+    
+    def _get_cached_zuid(self, agent_slug: str) -> Optional[str]:
+        """Check Redis cache for a previously stored ZUID."""
+        if not agent_slug:
+            return None
+        cache_key = f"zuid:{agent_slug}"
+        zuid = cache.get(cache_key)
+        if zuid:
+            logger.info(f"ZUID cache HIT for '{agent_slug}': {zuid}")
+        return zuid
+    
+    def _cache_zuid(self, agent_slug: str, zuid: str):
+        """Store a ZUID in Redis cache for future use."""
+        if agent_slug and zuid:
+            cache_key = f"zuid:{agent_slug}"
+            cache.set(cache_key, zuid, ZUID_CACHE_TIMEOUT)
+            logger.info(f"Cached ZUID for '{agent_slug}': {zuid}")
+
     def get_agent_properties(
         self,
         agentname: str = None,
@@ -788,6 +821,11 @@ class AgentScraper(BaseScraper):
     ) -> Dict[str, Any]:
         """
         Get agent's properties.
+        
+        Optimized flow:
+        1. Check Redis for cached ZUID → if found, skip HTML download (~1s)
+        2. If no cached ZUID, download profile HTML to extract it (~8s)
+        3. Call Zillow internal API with ZUID to get listings
         
         Args:
             agentname: Agent screen name
@@ -806,32 +844,51 @@ class AgentScraper(BaseScraper):
         else:
             raise ValueError("Either agentname or url must be provided")
         
+        agent_slug = self._get_agent_slug(agentname, url)
+        
         try:
-            soup = self.get_soup(profile_url)
-
             properties = []
             total_properties = 0
             listings = []
+            soup = None
+            script_data = None
             
-            # Extract script data
-            script_data = extract_json_from_script(soup)
+            # === FAST PATH: Check ZUID cache first ===
+            zuid = self._get_cached_zuid(agent_slug)
             
-            # 1. Try Internal API (Preferred)
-            zuid = self._extract_zuid(script_data, soup)
             if zuid:
-                logger.info(f"Found ZUID: {zuid}, attempting internal API fetch")
+                # Skip the expensive HTML download entirely!
+                logger.info(f"Using cached ZUID: {zuid}, skipping HTML download")
                 api_data = self._fetch_agent_listings_api(zuid, property_type, page)
                 if api_data:
-                    # Handle different response keys for different endpoints
-                    # active-listings/rental-listings use 'listings' and 'listing_count'
-                    # past-sales uses 'past_sales' and 'total'
                     api_listings = api_data.get('listings') or api_data.get('past_sales') or []
                     api_total = api_data.get('listing_count') or api_data.get('total') or 0
                     
                     if api_listings:
                         listings = api_listings
                         total_properties = api_total or len(listings)
-                        logger.info(f"API fetch successful: {len(listings)} listings, {total_properties} total")
+                        logger.info(f"API fetch successful (cached ZUID): {len(listings)} listings, {total_properties} total")
+            
+            # === SLOW PATH: Download HTML to extract ZUID ===
+            if not listings:
+                soup = self.get_soup(profile_url)
+                script_data = extract_json_from_script(soup)
+                
+                zuid = self._extract_zuid(script_data, soup)
+                if zuid:
+                    # Cache the ZUID for future requests
+                    self._cache_zuid(agent_slug, zuid)
+                    
+                    logger.info(f"Found ZUID: {zuid}, attempting internal API fetch")
+                    api_data = self._fetch_agent_listings_api(zuid, property_type, page)
+                    if api_data:
+                        api_listings = api_data.get('listings') or api_data.get('past_sales') or []
+                        api_total = api_data.get('listing_count') or api_data.get('total') or 0
+                        
+                        if api_listings:
+                            listings = api_listings
+                            total_properties = api_total or len(listings)
+                            logger.info(f"API fetch successful: {len(listings)} listings, {total_properties} total")
 
             # 2. Fallback to Script Data (Next.js props) if API failed
             if not listings and script_data:
@@ -861,7 +918,7 @@ class AgentScraper(BaseScraper):
                             break
             
             # Fallback: Parse total count from HTML text (e.g., "Sold (3254)")
-            if total_properties == 0 or total_properties == len(listings):
+            if (total_properties == 0 or total_properties == len(listings)) and soup:
                  # Look for headers like "Sold (3254)", "Rentals (13)", "For Sale (10)"
                  labels = []
                  if property_type == 'sold':
@@ -889,7 +946,7 @@ class AgentScraper(BaseScraper):
                     properties.append(parsed)
             
             # Fallback: Parse HTML if no properties found (and no JSON listings)
-            if not properties and not listings:
+            if not properties and not listings and soup:
                 property_cards = soup.select('[data-test="property-card"], .property-card, .list-card')
                 for card in property_cards:
                     # Extract basic info
