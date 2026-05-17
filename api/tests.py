@@ -67,20 +67,18 @@ class ProxyManagerTests(TestCase):
         self.assertIsNone(manager.get_proxy())
     
     @patch('core.proxy_manager.settings')
-    @patch('core.proxy_manager.cache')
-    def test_proxy_rotation(self, mock_cache, mock_settings):
-        """Test proxy rotation."""
+    def test_proxy_rotation(self, mock_settings):
+        """Test proxy configuration."""
         mock_settings.SCRAPER_SETTINGS = {
             'PROXIES': ['http://proxy1:8080', 'http://proxy2:8080']
         }
-        mock_cache.get.return_value = 0
         
         manager = ProxyManager()
         proxy = manager.get_proxy()
         
         self.assertIsNotNone(proxy)
-        self.assertIn('http', proxy)
-        self.assertIn('https', proxy)
+        self.assertEqual(proxy['http'], 'http://proxy1:8080')
+        self.assertEqual(proxy['https'], 'http://proxy1:8080')
 
 
 class UserAgentManagerTests(TestCase):
@@ -108,35 +106,42 @@ class APIEndpointTests(APITestCase):
     @patch('api.views.agent_scraper')
     def test_agent_by_location(self, mock_scraper):
         """Test agentBylocation endpoint."""
-        mock_scraper.get_agents_by_location.return_value = [
-            {'name': 'Test Agent', 'url': 'http://test.com', 'location': 'LA'}
-        ]
-        
+        mock_scraper.get_agents_by_location.return_value = {
+            'results': [
+                {'name': 'Test Agent', 'url': 'http://test.com', 'location': 'LA'}
+            ],
+            'total_results': 1,
+            'current_page': 1
+        }
         response = self.client.get('/agentBylocation', {'location': 'los-angeles'})
         
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(len(response.data), 1)
-        self.assertEqual(response.data[0]['name'], 'Test Agent')
+        self.assertEqual(response.data['count'], 1)
+        self.assertEqual(response.data['results'][0]['name'], 'Test Agent')
     
     @patch('api.views.property_scraper')
     def test_by_location(self, mock_scraper):
         """Test bylocation endpoint."""
-        mock_scraper.search_by_location.return_value = [
-            {
-                'zpid': 123,
-                'address': '123 Test St',
-                'url': 'http://test.com',
-                'price': 500000,
-                'beds': 3,
-                'baths': 2,
-                'sqft': 1500,
-            }
-        ]
+        mock_scraper.search_by_location.return_value = {
+            'results': [
+                {
+                    'zpid': 123,
+                    'address': '123 Test St',
+                    'url': 'http://test.com',
+                    'price': 500000,
+                    'beds': 3,
+                    'baths': 2,
+                    'sqft': 1500,
+                }
+            ],
+            'total_results': 1,
+            'current_page': 1
+        }
         
         response = self.client.get('/bylocation', {'location': 'seattle-wa'})
         
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(len(response.data), 1)
+        self.assertEqual(response.data['count'], 1)
     
     @patch('api.views.property_scraper')
     def test_autocomplete(self, mock_scraper):
@@ -154,16 +159,19 @@ class APIEndpointTests(APITestCase):
         """Test autocomplete endpoint without query."""
         response = self.client.get('/autocomplete')
         
-        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['status_code'], 400)
     
     def test_by_coordinates_missing_params(self):
         """Test bycoordinates endpoint without required params."""
         response = self.client.get('/bycoordinates')
         
-        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['status_code'], 400)
     
     def test_agent_info_missing_params(self):
         """Test agentInfo endpoint without required params."""
         response = self.client.get('/agentInfo')
         
-        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['status_code'], 400)

@@ -40,9 +40,13 @@ def get_paginated_response_schema(resource_serializer_class, name):
     )
 
 
-def build_paginated_response(results, total_results, current_page, per_page=DEFAULT_PER_PAGE):
+def build_paginated_response(results, total_results, current_page, per_page=DEFAULT_PER_PAGE, max_pages=None):
     """Build a standardized paginated response wrapper."""
     total_pages = max(1, (total_results + per_page - 1) // per_page)
+    if max_pages is not None:
+        total_pages = min(max_pages, total_pages)
+        total_results = min(total_results, max_pages * per_page)
+        
     return {
         'count': len(results),
         'results': results,
@@ -426,7 +430,8 @@ def by_location(request):
     return Response(build_paginated_response(
         results=serializer.data,
         total_results=result.get('total_results', len(result['results'])),
-        current_page=result.get('current_page', page)
+        current_page=result.get('current_page', page),
+        max_pages=20
     ))
 
 
@@ -479,7 +484,8 @@ def by_coordinates(request):
     return Response(build_paginated_response(
         results=serializer.data,
         total_results=result.get('total_results', len(result['results'])),
-        current_page=result.get('current_page', page)
+        current_page=result.get('current_page', page),
+        max_pages=20
     ))
 
 
@@ -539,7 +545,8 @@ def by_map_bounds(request):
     return Response(build_paginated_response(
         results=serializer.data,
         total_results=result.get('total_results', len(result['results'])),
-        current_page=result.get('current_page', page)
+        current_page=result.get('current_page', page),
+        max_pages=20
     ))
 
 
@@ -577,7 +584,8 @@ def by_mls_id(request):
     return Response(build_paginated_response(
         results=serializer.data,
         total_results=result.get('total_results', len(result['results'])),
-        current_page=result.get('current_page', page)
+        current_page=result.get('current_page', page),
+        max_pages=20
     ))
 
 
@@ -624,7 +632,8 @@ def by_polygon(request):
     return Response(build_paginated_response(
         results=serializer.data,
         total_results=result.get('total_results', len(result['results'])),
-        current_page=result.get('current_page', page)
+        current_page=result.get('current_page', page),
+        max_pages=20
     ))
 
 
@@ -663,7 +672,8 @@ def by_url(request):
     return Response(build_paginated_response(
         results=serializer.data,
         total_results=result.get('total_results', len(result['results'])),
-        current_page=result.get('current_page', 1)
+        current_page=result.get('current_page', 1),
+        max_pages=20
     ))
 
 

@@ -339,14 +339,17 @@ class PropertyScraper(BaseScraper):
         If an exact address returns 404, falls back to a broader city+state search.
         
         Args:
-            location: Location string
-            list_type: 'for-sale', 'for-rent', or 'sold'
-            page: Page number
-            **filters: Additional search filters
-            
+        	location: Location string
+        	list_type: 'for-sale', 'for-rent', or 'sold'
+        	page: Page number
+        	**filters: Additional search filters
+        	
         Returns:
-            Dict with 'results', 'total_results', and 'current_page'
+        	Dict with 'results', 'total_results', and 'current_page'
         """
+        if page > 20:
+            raise NotFoundException("Zillow search results are limited to 20 pages (800 properties).")
+            
         url = build_search_url(location, list_type, page)
         
         try:
@@ -463,6 +466,9 @@ class PropertyScraper(BaseScraper):
         Returns:
             Dict with 'results', 'total_results', and 'current_page'
         """
+        if page > 20:
+            raise NotFoundException("Zillow search results are limited to 20 pages (800 properties).")
+            
         # Build search query state
         map_bounds = {
             'north': north,
@@ -519,6 +525,9 @@ class PropertyScraper(BaseScraper):
         Returns:
             Dict with 'results' (list), 'total_results', and 'current_page'
         """
+        if page > 20:
+            raise NotFoundException("Zillow search results are limited to 20 pages (800 properties).")
+            
         try:
             # Search for the MLS ID
             search_url = f"{self.BASE_URL}/homes/{mls_id}/"
