@@ -47,20 +47,8 @@ class ProxyManager:
         
         if request:
             host = request.get_host()
-            
-            # --- DEBUG LOGGING ---
-            logger.info(f"DEBUG: request.get_host() = {host}")
-            
-            # Print specific headers that proxies commonly set
             rapidapi_host = request.headers.get('x-rapidapi-host', '')
             forwarded_host = request.headers.get('x-forwarded-host', '')
-            logger.info(f"DEBUG: x-rapidapi-host = {rapidapi_host}")
-            logger.info(f"DEBUG: x-forwarded-host = {forwarded_host}")
-            
-            # Print all headers for complete visibility
-            headers_dict = {k: v for k, v in request.headers.items()}
-            logger.info(f"DEBUG: All headers: {headers_dict}")
-            # ----------------------
             
             # Check host, X-RapidAPI-Host, and X-Forwarded-Host
             if ('zillow-com-live-data-scraper-api.p.rapidapi.com' in host or
