@@ -61,22 +61,22 @@ class SessionPool:
         if self._initialized:
             return
         self._initialized = True
-        self._session = None
+        self._sessions = {}  # {proxy_key: {'session': session, 'request_count': int}}
         self._session_lock = threading.Lock()
-        self._request_count = 0
         # Refresh session after N requests to avoid stale cookies
         self._max_requests_per_session = 50
         logger.info("SessionPool initialized")
     
-    def _create_session(self) -> requests.Session:
+    def _create_session(self, proxies) -> requests.Session:
         """Create and pre-warm a new curl_cffi session."""
-        proxies = proxy_manager.get_proxy()
+
         
         session = requests.Session()
         
         # Pre-warm: hit Zillow homepage to establish TLS + get challenge cookies
         try:
-            logger.info("Pre-warming session against Zillow...")
+            proxy_log = proxies['http'][:30] + '...' if proxies else 'none'
+            logger.info(f"Pre-warming session against Zillow with proxy {proxy_log}")
             t0 = time.time()
             resp = session.get(
                 "https://www.zillow.com/",
@@ -96,38 +96,49 @@ class SessionPool:
     
     def get_session(self) -> requests.Session:
         """Get a warm session, creating/refreshing if needed."""
+        proxies = proxy_manager.get_proxy()
+        proxy_key = proxies['http'] if proxies else 'default'
+        
         with self._session_lock:
+            session_data = self._sessions.get(proxy_key)
+            
             if (
-                self._session is None 
-                or self._request_count >= self._max_requests_per_session
+                session_data is None 
+                or session_data['request_count'] >= self._max_requests_per_session
             ):
                 # Close old session if exists
-                if self._session is not None:
+                if session_data is not None:
                     try:
-                        self._session.close()
+                        session_data['session'].close()
                     except Exception:
                         pass
                     logger.info(
-                        f"Refreshing session after {self._request_count} requests"
+                        f"Refreshing session after {session_data['request_count']} requests"
                     )
                 
-                self._session = self._create_session()
-                self._request_count = 0
+                self._sessions[proxy_key] = {
+                    'session': self._create_session(proxies),
+                    'request_count': 0
+                }
+                session_data = self._sessions[proxy_key]
             
-            self._request_count += 1
-            return self._session
+            session_data['request_count'] += 1
+            return session_data['session']
     
     def invalidate(self):
         """Force-refresh the session (e.g., after repeated blocks)."""
+        proxies = proxy_manager.get_proxy()
+        proxy_key = proxies['http'] if proxies else 'default'
+        
         with self._session_lock:
-            if self._session is not None:
+            session_data = self._sessions.get(proxy_key)
+            if session_data is not None:
                 try:
-                    self._session.close()
+                    session_data['session'].close()
                 except Exception:
                     pass
-            self._session = None
-            self._request_count = 0
-            logger.info("Session invalidated, will re-warm on next request")
+                del self._sessions[proxy_key]
+            logger.info(f"Session invalidated for proxy {proxy_key[:30]}, will re-warm on next request")
 
 
 # Module-level singleton

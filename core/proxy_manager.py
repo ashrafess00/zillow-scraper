@@ -8,6 +8,7 @@ the provider handles IP rotation automatically on each request.
 import logging
 from typing import Optional, Dict
 from django.conf import settings
+from core.middleware import get_current_request
 
 logger = logging.getLogger(__name__)
 
@@ -21,11 +22,11 @@ class ProxyManager:
     """
     
     def __init__(self):
-        self.proxy_url = self._load_proxy()
+        pass
         
-    def _load_proxy(self) -> Optional[str]:
+    def _load_proxy(self, proxy_type: str = 'PROXIES') -> Optional[str]:
         """Load proxy from settings."""
-        proxies = settings.SCRAPER_SETTINGS.get('PROXIES', [])
+        proxies = settings.SCRAPER_SETTINGS.get(proxy_type, [])
         if isinstance(proxies, str):
             proxies = [p.strip() for p in proxies.split(',') if p.strip()]
         
@@ -36,20 +37,35 @@ class ProxyManager:
     
     def get_proxy(self) -> Optional[Dict[str, str]]:
         """
-        Get the configured proxy.
+        Get the configured proxy dynamically based on the current request host.
         
         Returns:
             Dictionary with 'http' and 'https' keys, or None if no proxy configured.
         """
-        if not self.proxy_url:
-            logger.debug("No proxy configured. Requests will be made directly.")
+        proxy_type = 'PROXIES'
+        request = get_current_request()
+        
+        if request:
+            host = request.get_host()
+            if 'zillow-com-live-data-scraper-api.p.rapidapi.com' in host:
+                proxy_type = 'PROXIES_LIVE_DATA'
+                
+        proxy_url = self._load_proxy(proxy_type)
+        
+        if proxy_type == 'PROXIES_LIVE_DATA' and not proxy_url:
+            raise ValueError("PROXIES_LIVE_DATA must be defined when using the zillow-com-live-data-scraper-api host.")
+            
+        if not proxy_url:
+            logger.debug(f"No proxy configured for {proxy_type}. Requests will be made directly.")
             return None
         
-        logger.debug(f"Using proxy: {self.proxy_url[:30]}...")
+        logger.debug(f"Using proxy ({proxy_type}): {proxy_url[:30]}...")
         return {
-            'http': self.proxy_url,
-            'https': self.proxy_url,
+            'http': proxy_url,
+            'https': proxy_url,
         }
+    
+
     
     def get_random_proxy(self) -> Optional[Dict[str, str]]:
         """Alias for get_proxy() for backward compatibility."""
@@ -64,8 +80,8 @@ class ProxyManager:
         pass
     
     def get_proxy_count(self) -> int:
-        """Return 1 if proxy configured, 0 otherwise."""
-        return 1 if self.proxy_url else 0
+        """Return 1 if default proxy configured, 0 otherwise."""
+        return 1 if self._load_proxy('PROXIES') else 0
     
     def get_available_proxy_count(self) -> int:
         """Return 1 if proxy configured, 0 otherwise."""

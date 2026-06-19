@@ -44,6 +44,7 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
+    'core.middleware.RequestMiddleware',
 ]
 
 ROOT_URLCONF = 'zillow_scraper.urls'
@@ -162,6 +163,7 @@ CELERY_TIMEZONE = TIME_ZONE
 ## Scraper settings
 SCRAPER_SETTINGS = {
     'PROXIES': config('PROXIES', default='', cast=Csv()),
+    'PROXIES_LIVE_DATA': config('PROXIES_LIVE_DATA', default='', cast=Csv()),
     'USER_AGENTS': config('USER_AGENTS', default='', cast=Csv()),
     'REQUEST_DELAY_MIN': config('REQUEST_DELAY_MIN', default=0, cast=float),
     'REQUEST_DELAY_MAX': config('REQUEST_DELAY_MAX', default=0, cast=float),
