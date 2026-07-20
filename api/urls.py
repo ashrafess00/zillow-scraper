@@ -12,7 +12,7 @@ CACHE_TTL = 60 * 15
 
 urlpatterns = [
     # Agent endpoints (Cached)
-    path('agentBylocation', cache_page(CACHE_TTL)(views.agent_by_location), name='agent-by-location'),
+    path('agentByLocation', cache_page(CACHE_TTL)(views.agent_by_location), name='agent-by-location'),
     path('agentInfo', cache_page(CACHE_TTL)(views.agent_info), name='agent-info'),
     path('agentReviews', cache_page(CACHE_TTL)(views.agent_reviews), name='agent-reviews'),
     path('agentForSaleProperties', cache_page(CACHE_TTL)(views.agent_for_sale_properties), name='agent-for-sale'),

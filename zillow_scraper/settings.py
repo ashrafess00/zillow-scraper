@@ -68,16 +68,18 @@ TEMPLATES = [
 WSGI_APPLICATION = 'zillow_scraper.wsgi.application'
 
 # Database
+# SQLite is sufficient: the DB only holds Django's system tables
+# (admin/auth/sessions). Scraped data is served in real time and never persisted.
 DATABASES = {
     'default': {
-        'ENGINE': 'django.db.backends.postgresql',
-        'NAME': config('POSTGRES_DB', default='zillow_scraper'),
-        'USER': config('POSTGRES_USER', default='zillow_user'),
-        'PASSWORD': config('POSTGRES_PASSWORD', default='zillow_password'),
-        'HOST': config('DATABASE_HOST', default='db'),
-        'PORT': config('DATABASE_PORT', default='5432'),
+        'ENGINE': 'django.db.backends.sqlite3',
+        'NAME': BASE_DIR / 'db.sqlite3',
     }
 }
+
+# Store sessions in Redis (not the DB) so SQLite stays effectively write-free at runtime.
+SESSION_ENGINE = 'django.contrib.sessions.backends.cache'
+SESSION_CACHE_ALIAS = 'default'
 
 # Redis Cache
 CACHES = {

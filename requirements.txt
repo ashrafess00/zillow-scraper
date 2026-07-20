@@ -3,9 +3,6 @@ Django>=4.2,<5.0
 djangorestframework>=3.14,<4.0
 django-cors-headers>=4.3,<5.0
 
-# Database
-psycopg2-binary>=2.9,<3.0
-
 # Celery and Redis
 celery>=5.3,<6.0
 redis>=5.0,<6.0

@@ -4,599 +4,599 @@ info:
   version: 1.0.0
   description: Real-time scraping API for Zillow.com real estate data
 paths:
-  /agentBylocation:
+  /agentByLocation:
     get:
       operationId: agentBylocation_list
       description: Returns a list of real estate agents in the specified location.
       summary: Get agents by location
       parameters:
-      - in: query
-        name: location
-        schema:
-          type: string
-          example: los-angeles-ca
-        description: Location slug (e.g., los-angeles-ca, new-york-ny, miami-fl)
-      - in: query
-        name: page
-        schema:
-          type: integer
-          example: 1
-        description: Page number
+        - in: query
+          name: location
+          schema:
+            type: string
+            example: los-angeles-ca
+          description: Location slug (e.g., los-angeles-ca, new-york-ny, miami-fl)
+        - in: query
+          name: page
+          schema:
+            type: integer
+            example: 1
+          description: Page number
       tags:
-      - Agents
+        - Agents
       security:
-      - {}
+        - {}
       responses:
-        '200':
+        "200":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/PaginatedAgentResponse'
-          description: ''
-        '404':
+                $ref: "#/components/schemas/PaginatedAgentResponse"
+          description: ""
+        "404":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Error'
-          description: ''
+                $ref: "#/components/schemas/Error"
+          description: ""
   /agentForRentProperties:
     get:
       operationId: agentForRentProperties_list
       description: Returns properties currently for rent by a specific agent.
       summary: Get agent's rental properties
       parameters:
-      - in: query
-        name: agentname
-        schema:
-          type: string
-          example: Pardee-Properties
-        description: Agent screen name
-      - in: query
-        name: url
-        schema:
-          type: string
-          example: https://www.zillow.com/profile/Pardee-Properties/
-        description: Agent profile URL
-      - in: query
-        name: page
-        schema:
-          type: integer
-          example: 1
-        description: Page number
+        - in: query
+          name: agentname
+          schema:
+            type: string
+            example: Pardee-Properties
+          description: Agent screen name
+        - in: query
+          name: url
+          schema:
+            type: string
+            example: https://www.zillow.com/profile/Pardee-Properties/
+          description: Agent profile URL
+        - in: query
+          name: page
+          schema:
+            type: integer
+            example: 1
+          description: Page number
       tags:
-      - Agents
+        - Agents
       security:
-      - {}
+        - {}
       responses:
-        '200':
+        "200":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/PaginatedPropertyResponse'
-          description: ''
-        '404':
+                $ref: "#/components/schemas/PaginatedPropertyResponse"
+          description: ""
+        "404":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Error'
-          description: ''
+                $ref: "#/components/schemas/Error"
+          description: ""
   /agentForSaleProperties:
     get:
       operationId: agentForSaleProperties_list
       description: Returns properties currently for sale by a specific agent.
       summary: Get agent's for-sale properties
       parameters:
-      - in: query
-        name: agentname
-        schema:
-          type: string
-          example: Pardee-Properties
-        description: Agent screen name
-      - in: query
-        name: url
-        schema:
-          type: string
-          example: https://www.zillow.com/profile/Pardee-Properties/
-        description: Agent profile URL
-      - in: query
-        name: page
-        schema:
-          type: integer
-          example: 1
-        description: Page number
+        - in: query
+          name: agentname
+          schema:
+            type: string
+            example: Pardee-Properties
+          description: Agent screen name
+        - in: query
+          name: url
+          schema:
+            type: string
+            example: https://www.zillow.com/profile/Pardee-Properties/
+          description: Agent profile URL
+        - in: query
+          name: page
+          schema:
+            type: integer
+            example: 1
+          description: Page number
       tags:
-      - Agents
+        - Agents
       security:
-      - {}
+        - {}
       responses:
-        '200':
+        "200":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/PaginatedPropertyResponse'
-          description: ''
-        '404':
+                $ref: "#/components/schemas/PaginatedPropertyResponse"
+          description: ""
+        "404":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Error'
-          description: ''
+                $ref: "#/components/schemas/Error"
+          description: ""
   /agentInfo:
     get:
       operationId: agentInfo_retrieve
       description: Returns detailed information about a specific agent.
       summary: Get agent information
       parameters:
-      - in: query
-        name: agentname
-        schema:
-          type: string
-          example: Pardee-Properties
-        description: Agent screen name
-      - in: query
-        name: url
-        schema:
-          type: string
-          example: https://www.zillow.com/profile/Pardee-Properties/
-        description: Agent profile URL
+        - in: query
+          name: agentname
+          schema:
+            type: string
+            example: Pardee-Properties
+          description: Agent screen name
+        - in: query
+          name: url
+          schema:
+            type: string
+            example: https://www.zillow.com/profile/Pardee-Properties/
+          description: Agent profile URL
       tags:
-      - Agents
+        - Agents
       security:
-      - {}
+        - {}
       responses:
-        '200':
+        "200":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Agent'
-          description: ''
-        '404':
+                $ref: "#/components/schemas/Agent"
+          description: ""
+        "404":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Error'
-          description: ''
+                $ref: "#/components/schemas/Error"
+          description: ""
   /agentReviews:
     get:
       operationId: agentReviews_list
       description: Returns reviews for a specific agent.
       summary: Get agent reviews
       parameters:
-      - in: query
-        name: agentname
-        schema:
-          type: string
-          example: Pardee-Properties
-        description: Agent screen name
-      - in: query
-        name: url
-        schema:
-          type: string
-          example: https://www.zillow.com/profile/Pardee-Properties/
-        description: Agent profile URL
-      - in: query
-        name: page
-        schema:
-          type: integer
-          example: 1
-        description: Page number
+        - in: query
+          name: agentname
+          schema:
+            type: string
+            example: Pardee-Properties
+          description: Agent screen name
+        - in: query
+          name: url
+          schema:
+            type: string
+            example: https://www.zillow.com/profile/Pardee-Properties/
+          description: Agent profile URL
+        - in: query
+          name: page
+          schema:
+            type: integer
+            example: 1
+          description: Page number
       tags:
-      - Agents
+        - Agents
       security:
-      - {}
+        - {}
       responses:
-        '200':
+        "200":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/PaginatedReviewResponse'
-          description: ''
-        '404':
+                $ref: "#/components/schemas/PaginatedReviewResponse"
+          description: ""
+        "404":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Error'
-          description: ''
+                $ref: "#/components/schemas/Error"
+          description: ""
   /agentSoldProperties:
     get:
       operationId: agentSoldProperties_list
       description: Returns properties previously sold by a specific agent.
       summary: Get agent's sold properties
       parameters:
-      - in: query
-        name: agentname
-        schema:
-          type: string
-          example: Pardee-Properties
-        description: Agent screen name
-      - in: query
-        name: url
-        schema:
-          type: string
-          example: https://www.zillow.com/profile/Pardee-Properties/
-        description: Agent profile URL
-      - in: query
-        name: page
-        schema:
-          type: integer
-          example: 1
-        description: Page number
+        - in: query
+          name: agentname
+          schema:
+            type: string
+            example: Pardee-Properties
+          description: Agent screen name
+        - in: query
+          name: url
+          schema:
+            type: string
+            example: https://www.zillow.com/profile/Pardee-Properties/
+          description: Agent profile URL
+        - in: query
+          name: page
+          schema:
+            type: integer
+            example: 1
+          description: Page number
       tags:
-      - Agents
+        - Agents
       security:
-      - {}
+        - {}
       responses:
-        '200':
+        "200":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/PaginatedPropertyResponse'
-          description: ''
-        '404':
+                $ref: "#/components/schemas/PaginatedPropertyResponse"
+          description: ""
+        "404":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Error'
-          description: ''
+                $ref: "#/components/schemas/Error"
+          description: ""
   /apartmentDetails:
     get:
       operationId: apartmentDetails_retrieve
       description: Get detailed information about an apartment or building.
       summary: Get apartment details
       parameters:
-      - in: query
-        name: url
-        schema:
-          type: string
-          example: https://www.zillow.com/b/the-lorenzo-los-angeles-ca-5XjWP2/
-        description: Apartment listing URL
-        required: true
+        - in: query
+          name: url
+          schema:
+            type: string
+            example: https://www.zillow.com/b/the-lorenzo-los-angeles-ca-5XjWP2/
+          description: Apartment listing URL
+          required: true
       tags:
-      - Properties
+        - Properties
       security:
-      - {}
+        - {}
       responses:
-        '200':
+        "200":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ApartmentDetails'
-          description: ''
-        '404':
+                $ref: "#/components/schemas/ApartmentDetails"
+          description: ""
+        "404":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Error'
-          description: ''
+                $ref: "#/components/schemas/Error"
+          description: ""
   /autocomplete:
     get:
       operationId: autocomplete_list
       description: Get autocomplete suggestions for a location query.
       summary: Location autocomplete
       parameters:
-      - in: query
-        name: q
-        schema:
-          type: string
-          example: Los Angeles
-        description: Search query
-        required: true
+        - in: query
+          name: q
+          schema:
+            type: string
+            example: Los Angeles
+          description: Search query
+          required: true
       tags:
-      - Utilities
+        - Utilities
       security:
-      - {}
+        - {}
       responses:
-        '200':
+        "200":
           content:
             application/json:
               schema:
                 type: array
                 items:
-                  $ref: '#/components/schemas/AutocompleteSuggestion'
-          description: ''
-        '404':
+                  $ref: "#/components/schemas/AutocompleteSuggestion"
+          description: ""
+        "404":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Error'
-          description: ''
+                $ref: "#/components/schemas/Error"
+          description: ""
   /bycoordinates:
     get:
       operationId: bycoordinates_list
       description: Search for properties near specific coordinates.
       summary: Search properties by coordinates
       parameters:
-      - in: query
-        name: lat
-        schema:
-          type: number
-          example: 34.0522
-        description: Latitude
-        required: true
-      - in: query
-        name: lng
-        schema:
-          type: number
-          example: -118.2437
-        description: Longitude
-        required: true
-      - in: query
-        name: listType
-        schema:
-          type: string
-          example: for-sale
-        description: 'Listing type: for-sale, for-rent, sold'
-      - in: query
-        name: page
-        schema:
-          type: integer
-          example: 1
-        description: Page number
+        - in: query
+          name: lat
+          schema:
+            type: number
+            example: 34.0522
+          description: Latitude
+          required: true
+        - in: query
+          name: lng
+          schema:
+            type: number
+            example: -118.2437
+          description: Longitude
+          required: true
+        - in: query
+          name: listType
+          schema:
+            type: string
+            example: for-sale
+          description: "Listing type: for-sale, for-rent, sold"
+        - in: query
+          name: page
+          schema:
+            type: integer
+            example: 1
+          description: Page number
       tags:
-      - Properties
+        - Properties
       security:
-      - {}
+        - {}
       responses:
-        '200':
+        "200":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/PaginatedPropertyResponse'
-          description: ''
-        '404':
+                $ref: "#/components/schemas/PaginatedPropertyResponse"
+          description: ""
+        "404":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Error'
-          description: ''
+                $ref: "#/components/schemas/Error"
+          description: ""
   /bylocation:
     get:
       operationId: bylocation_list
       description: Search for properties in a specific location with optional filters.
       summary: Search properties by location
       parameters:
-      - in: query
-        name: location
-        schema:
-          type: string
-          example: seattle-wa
-        description: Location slug (e.g., seattle-wa, miami-fl)
-      - in: query
-        name: listType
-        schema:
-          type: string
-          example: for-sale
-        description: 'Listing type: for-sale, for-rent, sold'
-      - in: query
-        name: beds
-        schema:
-          type: integer
-          example: 2
-        description: Minimum bedrooms
-      - in: query
-        name: baths
-        schema:
-          type: integer
-          example: 1
-        description: Minimum bathrooms
-      - in: query
-        name: minPrice
-        schema:
-          type: number
-          example: 100000
-        description: Minimum price
-      - in: query
-        name: maxPrice
-        schema:
-          type: number
-          example: 500000
-        description: Maximum price
-      - in: query
-        name: minSqft
-        schema:
-          type: integer
-          example: 500
-        description: Minimum square footage
-      - in: query
-        name: maxSqft
-        schema:
-          type: integer
-          example: 3000
-        description: Maximum square footage
-      - in: query
-        name: page
-        schema:
-          type: integer
-          example: 1
-        description: Page number
+        - in: query
+          name: location
+          schema:
+            type: string
+            example: seattle-wa
+          description: Location slug (e.g., seattle-wa, miami-fl)
+        - in: query
+          name: listType
+          schema:
+            type: string
+            example: for-sale
+          description: "Listing type: for-sale, for-rent, sold"
+        - in: query
+          name: beds
+          schema:
+            type: integer
+            example: 2
+          description: Minimum bedrooms
+        - in: query
+          name: baths
+          schema:
+            type: integer
+            example: 1
+          description: Minimum bathrooms
+        - in: query
+          name: minPrice
+          schema:
+            type: number
+            example: 100000
+          description: Minimum price
+        - in: query
+          name: maxPrice
+          schema:
+            type: number
+            example: 500000
+          description: Maximum price
+        - in: query
+          name: minSqft
+          schema:
+            type: integer
+            example: 500
+          description: Minimum square footage
+        - in: query
+          name: maxSqft
+          schema:
+            type: integer
+            example: 3000
+          description: Maximum square footage
+        - in: query
+          name: page
+          schema:
+            type: integer
+            example: 1
+          description: Page number
       tags:
-      - Properties
+        - Properties
       security:
-      - {}
+        - {}
       responses:
-        '200':
+        "200":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/PaginatedPropertyResponse'
-          description: ''
-        '404':
+                $ref: "#/components/schemas/PaginatedPropertyResponse"
+          description: ""
+        "404":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Error'
-          description: ''
+                $ref: "#/components/schemas/Error"
+          description: ""
   /bymapbounds:
     get:
       operationId: bymapbounds_list
       description: Search for properties within geographic map bounds.
       summary: Search properties by map bounds
       parameters:
-      - in: query
-        name: north
-        schema:
-          type: number
-          example: 34.1
-        description: Northern latitude bound
-        required: true
-      - in: query
-        name: south
-        schema:
-          type: number
-          example: 34.0
-        description: Southern latitude bound
-        required: true
-      - in: query
-        name: east
-        schema:
-          type: number
-          example: -118.4
-        description: Eastern longitude bound
-        required: true
-      - in: query
-        name: west
-        schema:
-          type: number
-          example: -118.5
-        description: Western longitude bound
-        required: true
-      - in: query
-        name: listType
-        schema:
-          type: string
-          example: for-sale
-        description: 'Listing type: for-sale, for-rent, sold'
-      - in: query
-        name: page
-        schema:
-          type: integer
-          example: 1
-        description: Page number
+        - in: query
+          name: north
+          schema:
+            type: number
+            example: 34.1
+          description: Northern latitude bound
+          required: true
+        - in: query
+          name: south
+          schema:
+            type: number
+            example: 34.0
+          description: Southern latitude bound
+          required: true
+        - in: query
+          name: east
+          schema:
+            type: number
+            example: -118.4
+          description: Eastern longitude bound
+          required: true
+        - in: query
+          name: west
+          schema:
+            type: number
+            example: -118.5
+          description: Western longitude bound
+          required: true
+        - in: query
+          name: listType
+          schema:
+            type: string
+            example: for-sale
+          description: "Listing type: for-sale, for-rent, sold"
+        - in: query
+          name: page
+          schema:
+            type: integer
+            example: 1
+          description: Page number
       tags:
-      - Properties
+        - Properties
       security:
-      - {}
+        - {}
       responses:
-        '200':
+        "200":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/PaginatedPropertyResponse'
-          description: ''
-        '404':
+                $ref: "#/components/schemas/PaginatedPropertyResponse"
+          description: ""
+        "404":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Error'
-          description: ''
+                $ref: "#/components/schemas/Error"
+          description: ""
   /bymlsid:
     get:
       operationId: bymlsid_list
       description: Search for properties by MLS listing ID.
       summary: Search properties by MLS ID
       parameters:
-      - in: query
-        name: mlsid
-        schema:
-          type: string
-          example: "24-123456"
-        description: MLS listing ID
-        required: true
-      - in: query
-        name: page
-        schema:
-          type: integer
-          example: 1
-        description: Page number
+        - in: query
+          name: mlsid
+          schema:
+            type: string
+            example: "24-123456"
+          description: MLS listing ID
+          required: true
+        - in: query
+          name: page
+          schema:
+            type: integer
+            example: 1
+          description: Page number
       tags:
-      - Properties
+        - Properties
       security:
-      - {}
+        - {}
       responses:
-        '200':
+        "200":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/PaginatedPropertyResponse'
-          description: ''
-        '404':
+                $ref: "#/components/schemas/PaginatedPropertyResponse"
+          description: ""
+        "404":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Error'
-          description: ''
+                $ref: "#/components/schemas/Error"
+          description: ""
   /bypolygon:
     get:
       operationId: bypolygon_list
       description: Search for properties within a polygon defined by coordinates.
       summary: Search properties by polygon
       parameters:
-      - in: query
-        name: polygon
-        schema:
-          type: string
-          example: "34.05,-118.25;34.10,-118.25;34.10,-118.20;34.05,-118.20"
-        description: Semicolon-separated coordinates (lat,lng;lat,lng;...)
-        required: true
-      - in: query
-        name: listType
-        schema:
-          type: string
-          example: for-sale
-        description: 'Listing type: for-sale, for-rent, sold'
-      - in: query
-        name: page
-        schema:
-          type: integer
-          example: 1
-        description: Page number
+        - in: query
+          name: polygon
+          schema:
+            type: string
+            example: "34.05,-118.25;34.10,-118.25;34.10,-118.20;34.05,-118.20"
+          description: Semicolon-separated coordinates (lat,lng;lat,lng;...)
+          required: true
+        - in: query
+          name: listType
+          schema:
+            type: string
+            example: for-sale
+          description: "Listing type: for-sale, for-rent, sold"
+        - in: query
+          name: page
+          schema:
+            type: integer
+            example: 1
+          description: Page number
       tags:
-      - Properties
+        - Properties
       security:
-      - {}
+        - {}
       responses:
-        '200':
+        "200":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/PaginatedPropertyResponse'
-          description: ''
-        '404':
+                $ref: "#/components/schemas/PaginatedPropertyResponse"
+          description: ""
+        "404":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Error'
-          description: ''
+                $ref: "#/components/schemas/Error"
+          description: ""
   /byurl:
     get:
       operationId: byurl_list
       description: Parse and return properties from a Zillow search URL.
       summary: Parse properties from Zillow URL
       parameters:
-      - in: query
-        name: url
-        schema:
-          type: string
-          example: https://www.zillow.com/los-angeles-ca/
-        description: Zillow search URL
-        required: true
+        - in: query
+          name: url
+          schema:
+            type: string
+            example: https://www.zillow.com/los-angeles-ca/
+          description: Zillow search URL
+          required: true
       tags:
-      - Properties
+        - Properties
       security:
-      - {}
+        - {}
       responses:
-        '200':
+        "200":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/PaginatedPropertyResponse'
-          description: ''
-        '404':
+                $ref: "#/components/schemas/PaginatedPropertyResponse"
+          description: ""
+        "404":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Error'
-          description: ''
+                $ref: "#/components/schemas/Error"
+          description: ""
 components:
   schemas:
     Agent:
@@ -646,8 +646,8 @@ components:
           type: string
           example: Experienced real estate team serving Los Angeles.
       required:
-      - name
-      - url
+        - name
+        - url
     ApartmentDetails:
       type: object
       description: Serializer for apartment details.
@@ -667,7 +667,7 @@ components:
         units:
           type: array
           items: {}
-          example: [{"beds": 1, "baths": 1, "price": 2500}]
+          example: [{ "beds": 1, "baths": 1, "price": 2500 }]
         amenities:
           type: array
           items: {}
@@ -677,9 +677,9 @@ components:
           items: {}
           example: ["https://photos.zillowstatic.com/123.jpg"]
       required:
-      - address
-      - name
-      - url
+        - address
+        - name
+        - url
     AutocompleteSuggestion:
       type: object
       description: Serializer for autocomplete suggestions.
@@ -694,8 +694,8 @@ components:
           type: string
           example: los-angeles-ca
       required:
-      - display
-      - type
+        - display
+        - type
     Error:
       type: object
       description: Serializer for error responses.
@@ -710,9 +710,9 @@ components:
           type: integer
           example: 404
       required:
-      - error
-      - message
-      - status_code
+        - error
+        - message
+        - status_code
     Property:
       type: object
       description: Serializer for property data.
@@ -767,7 +767,7 @@ components:
           type: string
           example: Keller Williams Realty
       required:
-      - address
+        - address
     Review:
       type: object
       description: Serializer for review data.
@@ -791,9 +791,9 @@ components:
           type: string
           example: Bought a home
       required:
-      - rating
-      - review
-      - zuid
+        - rating
+        - review
+        - zuid
     Pagination:
       type: object
       properties:
@@ -824,9 +824,9 @@ components:
         results:
           type: array
           items:
-            $ref: '#/components/schemas/Property'
+            $ref: "#/components/schemas/Property"
         pagination:
-          $ref: '#/components/schemas/Pagination'
+          $ref: "#/components/schemas/Pagination"
     PaginatedAgentResponse:
       type: object
       properties:
@@ -836,9 +836,9 @@ components:
         results:
           type: array
           items:
-            $ref: '#/components/schemas/Agent'
+            $ref: "#/components/schemas/Agent"
         pagination:
-          $ref: '#/components/schemas/Pagination'
+          $ref: "#/components/schemas/Pagination"
     PaginatedReviewResponse:
       type: object
       properties:
@@ -848,6 +848,6 @@ components:
         results:
           type: array
           items:
-            $ref: '#/components/schemas/Review'
+            $ref: "#/components/schemas/Review"
         pagination:
-          $ref: '#/components/schemas/Pagination'
+          $ref: "#/components/schemas/Pagination"
