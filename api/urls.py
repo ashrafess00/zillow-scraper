@@ -11,6 +11,9 @@ from django.views.decorators.cache import cache_page
 CACHE_TTL = 60 * 15
 
 urlpatterns = [
+    # Health check (never cached — must reflect live state)
+    path('health', views.health, name='health'),
+
     # Agent endpoints (Cached)
     path('agentByLocation', cache_page(CACHE_TTL)(views.agent_by_location), name='agent-by-location'),
     path('agentInfo', cache_page(CACHE_TTL)(views.agent_info), name='agent-info'),

@@ -3,6 +3,7 @@ API Views for the Zillow scraper.
 """
 
 import logging
+from django.conf import settings
 from rest_framework import status, serializers
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
@@ -735,6 +736,61 @@ def autocomplete(request):
     suggestions = property_scraper.autocomplete(query=query)
     serializer = AutocompleteSuggestionSerializer(suggestions, many=True)
     return Response(serializer.data)
+
+
+@extend_schema(
+    summary="Health check",
+    description=(
+        "Lightweight liveness/readiness probe. Reports the status of the Redis cache "
+        "and the database. Always returns HTTP 200; check the `status` field "
+        "(`ok` or `degraded`) and the per-component results in `checks`."
+    ),
+    responses={
+        200: inline_serializer(
+            name='HealthResponse',
+            fields={
+                'status': serializers.CharField(),
+                'version': serializers.CharField(),
+                'timestamp': serializers.CharField(),
+                'checks': serializers.DictField(),
+            }
+        ),
+    },
+    tags=['Utilities']
+)
+@api_view(['GET'])
+def health(request):
+    """Report service health (cache + database)."""
+    from datetime import datetime, timezone as dt_timezone
+    from django.core.cache import cache
+    from django.db import connection
+
+    checks = {}
+
+    try:
+        cache.set('health_check', 'ok', 10)
+        checks['cache'] = 'ok' if cache.get('health_check') == 'ok' else 'error: read-back failed'
+    except Exception as e:
+        logger.warning("Health check: cache failed: %s", e)
+        checks['cache'] = f'error: {e}'
+
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute('SELECT 1')
+            cursor.fetchone()
+        checks['database'] = 'ok'
+    except Exception as e:
+        logger.warning("Health check: database failed: %s", e)
+        checks['database'] = f'error: {e}'
+
+    overall = 'ok' if all(v == 'ok' for v in checks.values()) else 'degraded'
+
+    return Response({
+        'status': overall,
+        'version': settings.SPECTACULAR_SETTINGS.get('VERSION', 'unknown'),
+        'timestamp': datetime.now(dt_timezone.utc).isoformat(),
+        'checks': checks,
+    })
 
 
 @api_view(['GET'])

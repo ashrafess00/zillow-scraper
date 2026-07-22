@@ -105,7 +105,7 @@ class APIEndpointTests(APITestCase):
     
     @patch('api.views.agent_scraper')
     def test_agent_by_location(self, mock_scraper):
-        """Test agentBylocation endpoint."""
+        """Test agentByLocation endpoint."""
         mock_scraper.get_agents_by_location.return_value = {
             'results': [
                 {'name': 'Test Agent', 'url': 'http://test.com', 'location': 'LA'}

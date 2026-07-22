@@ -21,21 +21,25 @@ A Django REST Framework API that scrapes real estate data from Zillow.com in rea
 ### Using Docker
 
 1. Clone the repository and navigate to the project:
+
    ```bash
    cd rapidapi-repl
    ```
 
 2. Copy the environment file:
+
    ```bash
    cp .env.example .env
    ```
 
 3. Start the services:
+
    ```bash
    docker-compose up --build
    ```
 
 4. Run migrations:
+
    ```bash
    docker-compose exec web python manage.py migrate
    ```
@@ -48,12 +52,14 @@ A Django REST Framework API that scrapes real estate data from Zillow.com in rea
 ### Local Development
 
 1. Create a virtual environment:
+
    ```bash
    python -m venv venv
    source venv/bin/activate  # On Windows: venv\Scripts\activate
    ```
 
 2. Install dependencies:
+
    ```bash
    pip install -r requirements.txt
    ```
@@ -61,6 +67,7 @@ A Django REST Framework API that scrapes real estate data from Zillow.com in rea
 3. Set up environment variables (or use .env file)
 
 4. Run migrations:
+
    ```bash
    python manage.py migrate
    ```
@@ -74,27 +81,27 @@ A Django REST Framework API that scrapes real estate data from Zillow.com in rea
 
 ### Agents
 
-| Endpoint | Description |
-|----------|-------------|
-| `GET /agentBylocation` | Get agents by location |
-| `GET /agentInfo` | Get agent profile information |
-| `GET /agentReviews` | Get agent reviews |
+| Endpoint                      | Description                     |
+| ----------------------------- | ------------------------------- |
+| `GET /agentByLocation`        | Get agents by location          |
+| `GET /agentInfo`              | Get agent profile information   |
+| `GET /agentReviews`           | Get agent reviews               |
 | `GET /agentForSaleProperties` | Get agent's for-sale properties |
-| `GET /agentForRentProperties` | Get agent's rental properties |
-| `GET /agentSoldProperties` | Get agent's sold properties |
+| `GET /agentForRentProperties` | Get agent's rental properties   |
+| `GET /agentSoldProperties`    | Get agent's sold properties     |
 
 ### Properties
 
-| Endpoint | Description |
-|----------|-------------|
-| `GET /bylocation` | Search by location |
-| `GET /bycoordinates` | Search by coordinates |
-| `GET /bymapbounds` | Search by map bounds |
-| `GET /bymlsid` | Search by MLS ID |
-| `GET /bypolygon` | Search by polygon |
-| `GET /byurl` | Parse Zillow URL |
+| Endpoint                | Description           |
+| ----------------------- | --------------------- |
+| `GET /bylocation`       | Search by location    |
+| `GET /bycoordinates`    | Search by coordinates |
+| `GET /bymapbounds`      | Search by map bounds  |
+| `GET /bymlsid`          | Search by MLS ID      |
+| `GET /bypolygon`        | Search by polygon     |
+| `GET /byurl`            | Parse Zillow URL      |
 | `GET /apartmentDetails` | Get apartment details |
-| `GET /autocomplete` | Location autocomplete |
+| `GET /autocomplete`     | Location autocomplete |
 
 ## Configuration
 
