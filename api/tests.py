@@ -3,7 +3,7 @@ Tests for the Zillow scraper API.
 """
 
 from unittest.mock import patch, MagicMock
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from rest_framework.test import APITestCase
 from rest_framework import status
 
@@ -113,7 +113,7 @@ class APIEndpointTests(APITestCase):
             'total_results': 1,
             'current_page': 1
         }
-        response = self.client.get('/agentBylocation', {'location': 'los-angeles'})
+        response = self.client.get('/agentByLocation', {'location': 'los-angeles'})
         
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data['count'], 1)
@@ -175,3 +175,56 @@ class APIEndpointTests(APITestCase):
         
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data['status_code'], 400)
+
+
+class HealthCheckTests(APITestCase):
+    """Tests for the /health endpoint."""
+    
+    def test_health_ok(self):
+        """Test health endpoint reports component status."""
+        response = self.client.get('/health')
+        
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn(response.data['status'], ('ok', 'degraded'))
+        self.assertIn('database', response.data['checks'])
+        self.assertIn('cache', response.data['checks'])
+
+
+@override_settings(RAPIDAPI_PROXY_SECRET='s3cret')
+class RapidAPIOnlyMiddlewareTests(APITestCase):
+    """Tests for the RapidAPI-only gate."""
+    
+    def test_request_without_secret_is_rejected(self):
+        """Test a direct call with no proxy secret is refused."""
+        response = self.client.get('/autocomplete', {'q': 'los'})
+        
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+    
+    def test_request_with_wrong_secret_is_rejected(self):
+        """Test a call with the wrong proxy secret is refused."""
+        response = self.client.get('/autocomplete', {'q': 'los'}, HTTP_X_RAPIDAPI_PROXY_SECRET='nope')
+        
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+    
+    def test_request_with_secret_passes_through(self):
+        """Test a RapidAPI-proxied call reaches the view."""
+        with patch('scrapers.property_scraper.property_scraper.autocomplete', return_value=[]):
+            response = self.client.get(
+                '/autocomplete', {'q': 'los'}, HTTP_X_RAPIDAPI_PROXY_SECRET='s3cret'
+            )
+        
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+    
+    def test_health_is_exempt(self):
+        """Test the health probe works without the proxy secret."""
+        response = self.client.get('/health')
+        
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+    
+    def test_unset_secret_fails_open(self):
+        """Test enforcement is off when no secret is configured."""
+        with override_settings(RAPIDAPI_PROXY_SECRET=''):
+            with patch('scrapers.property_scraper.property_scraper.autocomplete', return_value=[]):
+                response = self.client.get('/autocomplete', {'q': 'los'})
+        
+        self.assertEqual(response.status_code, status.HTTP_200_OK)

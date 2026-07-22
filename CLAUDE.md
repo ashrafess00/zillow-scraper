@@ -24,7 +24,9 @@ Local (non-Docker) dev: `pip install -r requirements.txt`, then `python manage.p
 
 Docs: Swagger at `/api/docs/`, ReDoc at `/api/redoc/`, raw OpenAPI at `/api/schema/`. `zillow-openapi-schema.yaml` is the RapidAPI-facing schema.
 
-Config is via `.env` (python-decouple). Key vars: `PROXIES`, `PROXIES_LIVE_DATA`, `DEBUG`, `POSTGRES_*`, `REDIS_URL`, `RATE_LIMIT_PER_MINUTE`, `RATE_LIMIT_PER_HOUR`, `REQUEST_DELAY_MIN/MAX`, `MAX_RETRIES`.
+Config is via `.env` (python-decouple). Key vars: `PROXIES`, `PROXIES_LIVE_DATA`, `DEBUG`, `POSTGRES_*`, `REDIS_URL`, `RATE_LIMIT_PER_MINUTE`, `RATE_LIMIT_PER_HOUR`, `REQUEST_DELAY_MIN/MAX`, `MAX_RETRIES`, `RAPIDAPI_PROXY_SECRET`, `RAPIDAPI_EXEMPT_PATHS`.
+
+A `Makefile` wraps the common Compose/Django commands (`make up`, `make logs S=celery`, `make test ARGS=...`, `make health`); `make` alone lists them.
 
 ## Architecture
 
@@ -46,6 +48,10 @@ Request flow: `api/urls.py` → `api/views.py` (function-based `@api_view` views
 ### Proxy selection is request-host-aware
 
 `core/middleware.RequestMiddleware` stashes the current request in thread-locals so `proxy_manager.get_proxy()` can read the request host with no argument threading. When the host is the `zillow-com-live-data-scraper-api.p.rapidapi.com` RapidAPI listing, it uses the `PROXIES_LIVE_DATA` proxy pool (and raises if that pool is empty); otherwise it uses `PROXIES`. The proxy provider is assumed to rotate IPs itself, so `mark_proxy_failed`/`mark_proxy_success` are no-ops.
+
+### RapidAPI gating
+
+`core.middleware.RapidAPIOnlyMiddleware` rejects requests that lack RapidAPI's `X-RapidAPI-Proxy-Secret` header, which stops callers from hitting the server's IP directly and bypassing billing. It **fails open**: with `RAPIDAPI_PROXY_SECRET` unset it enforces nothing and only logs (once per state) whether the header is arriving — set the secret after the logs confirm it. Paths in `RAPIDAPI_EXEMPT_PATHS` (default `/health`) always pass. Rejections are a real HTTP 403, not the 200-error contract below, because non-RapidAPI traffic isn't counted in the listing's metrics.
 
 ### Error contract — everything returns HTTP 200
 

@@ -38,6 +38,9 @@ INSTALLED_APPS = [
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
     'corsheaders.middleware.CorsMiddleware',
+    # Runs early: requests that did not come through RapidAPI are rejected
+    # before any session/auth/scraping work happens.
+    'core.middleware.RapidAPIOnlyMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -120,6 +123,12 @@ STATIC_ROOT = BASE_DIR / 'staticfiles'
 
 # Default primary key field type
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+# RapidAPI gating (see core.middleware.RapidAPIOnlyMiddleware).
+# Leave RAPIDAPI_PROXY_SECRET empty to fail open (observe-only); set it to the
+# value from the RapidAPI provider dashboard to enforce.
+RAPIDAPI_PROXY_SECRET = config('RAPIDAPI_PROXY_SECRET', default='')
+RAPIDAPI_EXEMPT_PATHS = config('RAPIDAPI_EXEMPT_PATHS', default='/health', cast=Csv())
 
 # CORS settings
 CORS_ALLOW_ALL_ORIGINS = DEBUG
