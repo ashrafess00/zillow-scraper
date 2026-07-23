@@ -29,7 +29,8 @@ urlpatterns = [
     path('bymlsid', cache_page(CACHE_TTL)(views.by_mls_id), name='by-mls-id'),
     path('bypolygon', cache_page(CACHE_TTL)(views.by_polygon), name='by-polygon'),
     path('byurl', cache_page(CACHE_TTL)(views.by_url), name='by-url'),
-    
+    path('byAddress', cache_page(CACHE_TTL)(views.by_address), name='by-address'),
+
     # Property detail endpoints by zpid (Cached; all share one Zillow fetch)
     path('property', cache_page(CACHE_TTL)(views.property_detail), name='property-detail'),
     path('zestimate', cache_page(CACHE_TTL)(views.zestimate), name='zestimate'),

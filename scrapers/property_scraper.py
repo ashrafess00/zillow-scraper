@@ -33,11 +33,57 @@ logger = logging.getLogger(__name__)
 # api/urls.py — details like price/status can move, so we don't cache longer.
 PROPERTY_CACHE_TIMEOUT = 60 * 15
 
+# Friendly sort names → Zillow searchQueryState.sortSelection tokens.
+# Unknown values are passed through unchanged (Zillow ignores tokens it doesn't
+# recognize, so this fails soft). Tokens beyond "days"/"globalrelevanceex" are
+# best-effort and worth confirming against a live response.
+SORT_MAP = {
+    'relevant': 'globalrelevanceex',
+    'default': 'globalrelevanceex',
+    'newest': 'days',
+    'price_low': 'pricea',
+    'price_high': 'priced',
+    'sqft': 'size',
+    'lot': 'lot',
+    'beds': 'beds',
+    'baths': 'baths',
+}
+
+
+def resolve_sort(sort) -> Optional[str]:
+    """Map a friendly sort name to a Zillow token; pass unknown tokens through."""
+    if not sort:
+        return None
+    key = str(sort).strip().lower()
+    return SORT_MAP.get(key, key)
+
 
 class PropertyScraper(BaseScraper):
     """Scraper for Zillow property listings."""
     
-    def _build_search_query_state(self, **filters) -> Dict:
+    @staticmethod
+    def _apply_list_type(filter_state: Dict, list_type: str) -> None:
+        """
+        Toggle the filterState flags that select for-sale / for-rent / sold.
+
+        Zillow defaults to for-sale, so that case is left untouched. For rent and
+        sold we flip the relevant flag on and the competing ones off.
+        """
+        lt = (list_type or 'for-sale').lower()
+        SALE_FLAGS = ('isForSaleByAgent', 'isForSaleByOwner', 'isNewConstruction',
+                      'isComingSoon', 'isAuction', 'isForSaleForeclosure')
+        if lt in ('for-rent', 'rent'):
+            filter_state['isForRent'] = {'value': True}
+            filter_state['isRecentlySold'] = {'value': False}
+            for flag in SALE_FLAGS:
+                filter_state[flag] = {'value': False}
+        elif lt in ('sold', 'recently-sold'):
+            filter_state['isRecentlySold'] = {'value': True}
+            filter_state['isForRent'] = {'value': False}
+            for flag in SALE_FLAGS:
+                filter_state[flag] = {'value': False}
+
+    def _build_search_query_state(self, list_type: str = 'for-sale', sort=None, **filters) -> Dict:
         """Build Zillow search query state object."""
         filter_state = {}
         
@@ -140,7 +186,15 @@ class PropertyScraper(BaseScraper):
         # Days on Zillow
         if filters.get('daysOnZillow'):
             filter_state['daysOnZillow'] = {'value': filters['daysOnZillow']}
-        
+
+        # Listing type (for-sale / for-rent / sold)
+        self._apply_list_type(filter_state, list_type)
+
+        # Sort order
+        sort_token = resolve_sort(sort)
+        if sort_token:
+            filter_state['sortSelection'] = {'value': sort_token}
+
         return filter_state
     
     def _parse_search_results(self, soup) -> Dict[str, Any]:
@@ -333,6 +387,7 @@ class PropertyScraper(BaseScraper):
         location: str,
         list_type: str = 'for-sale',
         page: int = 1,
+        sort=None,
         **filters
     ) -> Dict[str, Any]:
         """
@@ -358,8 +413,9 @@ class PropertyScraper(BaseScraper):
         if page > 20:
             raise NotFoundException("Zillow search results are limited to 20 pages (800 properties).")
             
-        url = build_search_url(location, list_type, page)
-        
+        sort_token = resolve_sort(sort)
+        url = build_search_url(location, list_type, page, sort=sort_token)
+
         try:
             return self._fetch_and_parse_location(url, location, list_type, page)
         except NotFoundException:
@@ -368,7 +424,7 @@ class PropertyScraper(BaseScraper):
             broad_slug = slugify_location(location)
             if broad != broad_slug:
                 logger.info(f"Exact address not found, trying broader location: {broad}")
-                broad_url = build_search_url(broad, list_type, page)
+                broad_url = build_search_url(broad, list_type, page, sort=sort_token)
                 try:
                     return self._fetch_and_parse_location(broad_url, broad, list_type, page)
                 except NotFoundException:
@@ -421,6 +477,7 @@ class PropertyScraper(BaseScraper):
         lng: float,
         list_type: str = 'for-sale',
         page: int = 1,
+        sort=None,
         **filters
     ) -> Dict[str, Any]:
         """
@@ -446,6 +503,7 @@ class PropertyScraper(BaseScraper):
             west=lng - delta,
             list_type=list_type,
             page=page,
+            sort=sort,
             **filters
         )
     
@@ -457,6 +515,7 @@ class PropertyScraper(BaseScraper):
         west: float,
         list_type: str = 'for-sale',
         page: int = 1,
+        sort=None,
         **filters
     ) -> Dict[str, Any]:
         """
@@ -485,8 +544,10 @@ class PropertyScraper(BaseScraper):
             'west': west,
         }
         
-        filter_state = self._build_search_query_state(**filters)
-        
+        filter_state = self._build_search_query_state(
+            list_type=list_type, sort=sort, **filters
+        )
+
         search_query_state = {
             'mapBounds': map_bounds,
             'isMapVisible': True,
@@ -570,6 +631,7 @@ class PropertyScraper(BaseScraper):
         polygon: str,
         list_type: str = 'for-sale',
         page: int = 1,
+        sort=None,
         **filters
     ) -> Dict[str, Any]:
         """
@@ -608,6 +670,7 @@ class PropertyScraper(BaseScraper):
             west=min(lngs),
             list_type=list_type,
             page=page,
+            sort=sort,
             **filters
         )
     
@@ -1035,6 +1098,32 @@ class PropertyScraper(BaseScraper):
                 'longitude': home.get('longitude'),
             })
         return results
+
+    def search_by_address(self, address: str) -> Dict[str, Any]:
+        """
+        Resolve a street address to a single property's full details.
+
+        Runs the address through the location search (which Zillow redirects to
+        a /homedetails/ page for an exact match), takes the best-matching zpid,
+        and returns the rich detail object from get_property_details — so callers
+        with an address get the same payload as /property without needing a zpid.
+        """
+        if not address or not address.strip():
+            raise NotFoundException("address is required")
+
+        result = self.search_by_location(address)
+        results = result.get('results') or []
+        if not results:
+            raise NotFoundException(f"No property found for address: {address}")
+
+        zpid = results[0].get('zpid')
+        if zpid:
+            return self.get_property_details(zpid)
+
+        # No zpid on the match (rare) — return the thin search card as-is; the
+        # PropertyDetailsSerializer tolerates the missing fields.
+        logger.info(f"Address '{address}' matched a result without a zpid; returning search card")
+        return results[0]
 
     def get_apartment_details(self, url: str) -> Dict:
         """

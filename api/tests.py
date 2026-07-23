@@ -10,6 +10,7 @@ from rest_framework import status
 from api.serializers import AgentSerializer, PropertySerializer, ReviewSerializer
 from core.proxy_manager import ProxyManager
 from core.user_agent_manager import UserAgentManager
+from scrapers.base import NotFoundException
 
 
 class SerializerTests(TestCase):
@@ -407,3 +408,102 @@ class PropertyDetailEndpointTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(len(response.data), 1)
         self.assertEqual(response.data[0]['zpid'], 22222222)
+
+
+class SearchStatusSortTests(TestCase):
+    """Tests for listing-type toggles and sort in the search query state."""
+
+    def _scraper(self):
+        from scrapers.property_scraper import property_scraper
+        return property_scraper
+
+    def test_resolve_sort_friendly_and_passthrough(self):
+        from scrapers.property_scraper import resolve_sort
+        self.assertIsNone(resolve_sort(None))
+        self.assertIsNone(resolve_sort(''))
+        self.assertEqual(resolve_sort('newest'), 'days')
+        self.assertEqual(resolve_sort('price_high'), 'priced')
+        self.assertEqual(resolve_sort('PRICE_LOW'), 'pricea')
+        # Unknown tokens pass through unchanged (Zillow ignores bad ones).
+        self.assertEqual(resolve_sort('globalrelevanceex'), 'globalrelevanceex')
+
+    def test_query_state_for_sale_is_default(self):
+        fs = self._scraper()._build_search_query_state(list_type='for-sale')
+        self.assertNotIn('isForRent', fs)
+        self.assertNotIn('isRecentlySold', fs)
+
+    def test_query_state_for_rent_toggles(self):
+        fs = self._scraper()._build_search_query_state(list_type='for-rent')
+        self.assertEqual(fs['isForRent'], {'value': True})
+        self.assertEqual(fs['isRecentlySold'], {'value': False})
+        self.assertEqual(fs['isForSaleByAgent'], {'value': False})
+
+    def test_query_state_sold_toggles(self):
+        fs = self._scraper()._build_search_query_state(list_type='sold')
+        self.assertEqual(fs['isRecentlySold'], {'value': True})
+        self.assertEqual(fs['isForRent'], {'value': False})
+
+    def test_query_state_includes_sort(self):
+        fs = self._scraper()._build_search_query_state(list_type='for-sale', sort='newest')
+        self.assertEqual(fs['sortSelection'], {'value': 'days'})
+
+    def test_build_search_url_appends_sort(self):
+        from scrapers.utils import build_search_url
+        plain = build_search_url('austin-tx', 'for-sale', 1)
+        self.assertEqual(plain, 'https://www.zillow.com/austin-tx/')
+        sorted_url = build_search_url('austin-tx', 'for-sale', 1, sort='days')
+        self.assertIn('/austin-tx/?', sorted_url)
+        self.assertIn('sortSelection', sorted_url)
+
+    def test_map_bounds_passes_list_type_into_query_state(self):
+        """Regression: coordinates/mapbounds/polygon must honor listType (was ignored)."""
+        import json
+        from urllib.parse import parse_qs, urlparse
+        scraper = self._scraper()
+        captured = {}
+
+        def fake_get_soup(url):
+            captured['url'] = url
+            raise NotFoundException("stop here")  # we only care about the built URL
+
+        with patch.object(scraper, 'get_soup', side_effect=fake_get_soup):
+            with self.assertRaises(NotFoundException):
+                scraper.search_by_map_bounds(
+                    north=30.3, south=30.2, east=-97.7, west=-97.8,
+                    list_type='for-rent', sort='newest',
+                )
+        qs = parse_qs(urlparse(captured['url']).query)
+        state = json.loads(qs['searchQueryState'][0])
+        self.assertEqual(state['filterState']['isForRent'], {'value': True})
+        self.assertEqual(state['filterState']['sortSelection'], {'value': 'days'})
+
+
+class ByAddressTests(APITestCase):
+    """Tests for the /byAddress endpoint."""
+
+    def test_requires_address(self):
+        response = self.client.get('/byAddress')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['status_code'], 400)
+
+    def test_address_resolves_to_details(self):
+        """A matched zpid is looked up for full details."""
+        from scrapers.property_scraper import property_scraper
+        with patch.object(property_scraper, 'search_by_location',
+                          return_value={'results': [{'zpid': 12345678}], 'total_results': 1}) as m_loc, \
+             patch.object(property_scraper, 'get_property_details',
+                          return_value={'zpid': 12345678, 'address': '123 Main St', 'price': 750000.0}) as m_det:
+            response = self.client.get('/byAddress', {'address': '123 Main St, Austin, TX'})
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['zpid'], 12345678)
+        m_loc.assert_called_once()
+        m_det.assert_called_once_with(12345678)
+
+    def test_address_not_found(self):
+        """No match returns the empty-result contract (HTTP 200)."""
+        from scrapers.property_scraper import property_scraper
+        with patch.object(property_scraper, 'search_by_location',
+                          side_effect=NotFoundException('nope')):
+            response = self.client.get('/byAddress', {'address': 'nowhere'})
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['count'], 0)

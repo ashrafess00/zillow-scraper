@@ -6,6 +6,7 @@ import re
 import json
 import logging
 from typing import Optional, Dict, Any, List
+from urllib.parse import urlencode
 from bs4 import BeautifulSoup
 
 logger = logging.getLogger(__name__)
@@ -492,35 +493,51 @@ def build_search_url(
     location: str = None,
     list_type: str = 'for-sale',
     page: int = 1,
+    sort: str = None,
     **filters
 ) -> str:
     """
     Build a Zillow search URL with filters.
-    
+
     Args:
         location: Location string (e.g., "seattle-wa" or "35 Morse Ave Bloomfield, NJ 07003")
         list_type: Type of listing (for-sale, for-rent, sold)
         page: Page number
+        sort: Resolved Zillow sortSelection token (e.g. "days", "priced"); appended
+              as ?searchQueryState so the slug still supplies the region.
         **filters: Additional filters
-        
+
     Returns:
         Formatted search URL
     """
     base = "https://www.zillow.com"
-    
+
     if location:
         slug = slugify_location(location)
         path = f"/{slug}/"
     else:
         path = "/homes/"
-    
+
     if list_type == 'for-rent':
         path += "rentals/"
     elif list_type == 'sold':
         path += "sold/"
-    
+
     # Add pagination
     if page > 1:
         path += f"{page}_p/"
-    
-    return base + path
+
+    url = base + path
+
+    # Sort is only expressible via searchQueryState. Append it (region still
+    # comes from the slug path) only when requested, so default URLs are
+    # unchanged.
+    if sort:
+        qs = urlencode({
+            'searchQueryState': json.dumps({
+                'filterState': {'sortSelection': {'value': sort}}
+            })
+        })
+        url = f"{url}?{qs}"
+
+    return url

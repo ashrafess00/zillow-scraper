@@ -400,6 +400,7 @@ def _get_property_filters(request):
     parameters=[
         OpenApiParameter(name='location', type=OpenApiTypes.STR, description='Location slug (e.g., seattle-wa)'),
         OpenApiParameter(name='listType', type=OpenApiTypes.STR, description='Listing type: for-sale, for-rent, sold'),
+        OpenApiParameter(name='sort', type=OpenApiTypes.STR, description='Sort order: newest, price_low, price_high, sqft, lot, beds, baths'),
         OpenApiParameter(name='page', type=OpenApiTypes.INT, description='Page number'),
         OpenApiParameter(name='beds', type=OpenApiTypes.INT, description='Minimum bedrooms'),
         OpenApiParameter(name='baths', type=OpenApiTypes.INT, description='Minimum bathrooms'),
@@ -420,15 +421,17 @@ def by_location(request):
     """Search properties by location."""
     location = request.query_params.get('location', 'seattle-wa')
     list_type = request.query_params.get('listType', 'for-sale')
+    sort = request.query_params.get('sort')
     page = int(request.query_params.get('page', 1))
-    
+
     filters = _get_property_filters(request)
     filters.pop('page', None)  # Remove page from filters - we pass it explicitly
-    
+
     result = property_scraper.search_by_location(
         location=location,
         list_type=list_type,
         page=page,
+        sort=sort,
         **filters
     )
     
@@ -447,7 +450,8 @@ def by_location(request):
     parameters=[
         OpenApiParameter(name='lat', type=OpenApiTypes.NUMBER, description='Latitude', required=True),
         OpenApiParameter(name='lng', type=OpenApiTypes.NUMBER, description='Longitude', required=True),
-        OpenApiParameter(name='listType', type=OpenApiTypes.STR, description='Listing type'),
+        OpenApiParameter(name='listType', type=OpenApiTypes.STR, description='Listing type: for-sale, for-rent, sold'),
+        OpenApiParameter(name='sort', type=OpenApiTypes.STR, description='Sort order: newest, price_low, price_high, sqft, lot, beds, baths'),
         OpenApiParameter(name='page', type=OpenApiTypes.INT, description='Page number'),
     ],
     responses={
@@ -478,12 +482,13 @@ def by_coordinates(request):
         )
     
     list_type = request.query_params.get('listType', 'for-sale')
+    sort = request.query_params.get('sort')
     page = int(request.query_params.get('page', 1))
     filters = _get_property_filters(request)
     filters.pop('page', None)  # Remove page from filters
-    
+
     result = property_scraper.search_by_coordinates(
-        lat=lat, lng=lng, list_type=list_type, page=page, **filters
+        lat=lat, lng=lng, list_type=list_type, page=page, sort=sort, **filters
     )
     
     serializer = PropertySerializer(result['results'], many=True)
@@ -503,7 +508,8 @@ def by_coordinates(request):
         OpenApiParameter(name='south', type=OpenApiTypes.NUMBER, description='Southern latitude bound', required=True),
         OpenApiParameter(name='east', type=OpenApiTypes.NUMBER, description='Eastern longitude bound', required=True),
         OpenApiParameter(name='west', type=OpenApiTypes.NUMBER, description='Western longitude bound', required=True),
-        OpenApiParameter(name='listType', type=OpenApiTypes.STR, description='Listing type'),
+        OpenApiParameter(name='listType', type=OpenApiTypes.STR, description='Listing type: for-sale, for-rent, sold'),
+        OpenApiParameter(name='sort', type=OpenApiTypes.STR, description='Sort order: newest, price_low, price_high, sqft, lot, beds, baths'),
         OpenApiParameter(name='page', type=OpenApiTypes.INT, description='Page number'),
     ],
     responses={
@@ -538,13 +544,14 @@ def by_map_bounds(request):
         )
     
     list_type = request.query_params.get('listType', 'for-sale')
+    sort = request.query_params.get('sort')
     page = int(request.query_params.get('page', 1))
     filters = _get_property_filters(request)
     filters.pop('page', None)  # Remove page from filters
-    
+
     result = property_scraper.search_by_map_bounds(
         north=north, south=south, east=east, west=west,
-        list_type=list_type, page=page, **filters
+        list_type=list_type, page=page, sort=sort, **filters
     )
     
     serializer = PropertySerializer(result['results'], many=True)
@@ -605,7 +612,8 @@ def by_mls_id(request):
             description='Semicolon-separated coordinates (lat,lng;lat,lng;...)',
             required=True
         ),
-        OpenApiParameter(name='listType', type=OpenApiTypes.STR, description='Listing type'),
+        OpenApiParameter(name='listType', type=OpenApiTypes.STR, description='Listing type: for-sale, for-rent, sold'),
+        OpenApiParameter(name='sort', type=OpenApiTypes.STR, description='Sort order: newest, price_low, price_high, sqft, lot, beds, baths'),
         OpenApiParameter(name='page', type=OpenApiTypes.INT, description='Page number'),
     ],
     responses={
@@ -626,12 +634,13 @@ def by_polygon(request):
         )
     
     list_type = request.query_params.get('listType', 'for-sale')
+    sort = request.query_params.get('sort')
     page = int(request.query_params.get('page', 1))
     filters = _get_property_filters(request)
     filters.pop('page', None)  # Remove page from filters
-    
+
     result = property_scraper.search_by_polygon(
-        polygon=polygon, list_type=list_type, page=page, **filters
+        polygon=polygon, list_type=list_type, page=page, sort=sort, **filters
     )
     
     serializer = PropertySerializer(result['results'], many=True)
@@ -741,6 +750,32 @@ def autocomplete(request):
     suggestions = property_scraper.autocomplete(query=query)
     serializer = AutocompleteSuggestionSerializer(suggestions, many=True)
     return Response(serializer.data)
+
+
+@extend_schema(
+    summary="Get property details by address",
+    description=(
+        "Resolve a street address to a single property's full details — the same "
+        "rich payload as /property, without needing a zpid. Returns the "
+        "best-matching property."
+    ),
+    parameters=[
+        OpenApiParameter(name='address', type=OpenApiTypes.STR, description='Street address (e.g., "123 Main St, Austin, TX 78701")', required=True),
+    ],
+    responses={200: PropertyDetailsSerializer, 404: ErrorSerializer},
+    tags=['Properties']
+)
+@api_view(['GET'])
+def by_address(request):
+    """Get a property's full details by street address."""
+    address = request.query_params.get('address')
+    if not address:
+        return Response(
+            {'error': 'Bad Request', 'message': 'address is required', 'status_code': 400},
+            status=status.HTTP_200_OK
+        )
+    details = property_scraper.search_by_address(address)
+    return Response(PropertyDetailsSerializer(details).data)
 
 
 def _get_zpid(request):
