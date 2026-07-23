@@ -16,6 +16,11 @@ from .serializers import (
     ReviewSerializer,
     AutocompleteSuggestionSerializer,
     ApartmentDetailsSerializer,
+    PropertyDetailsSerializer,
+    ZestimateSerializer,
+    PriceHistoryEventSerializer,
+    TaxHistoryEventSerializer,
+    SchoolSerializer,
     ErrorSerializer,
     PaginationMetadataSerializer,
 )
@@ -736,6 +741,167 @@ def autocomplete(request):
     suggestions = property_scraper.autocomplete(query=query)
     serializer = AutocompleteSuggestionSerializer(suggestions, many=True)
     return Response(serializer.data)
+
+
+def _get_zpid(request):
+    """
+    Pull and validate the `zpid` query param.
+
+    Returns (zpid_int, None) on success or (None, error_response) with the
+    HTTP-200 validation-error body used everywhere else in this module.
+    """
+    raw = request.query_params.get('zpid')
+    if not raw:
+        return None, Response(
+            {'error': 'Bad Request', 'message': 'zpid is required', 'status_code': 400},
+            status=status.HTTP_200_OK
+        )
+    try:
+        return int(raw), None
+    except (TypeError, ValueError):
+        return None, Response(
+            {'error': 'Bad Request', 'message': 'zpid must be an integer', 'status_code': 400},
+            status=status.HTTP_200_OK
+        )
+
+
+@extend_schema(
+    summary="Get property details",
+    description=(
+        "Full details for a single property by its Zillow Property ID (zpid). "
+        "This is the primary lookup that warms the shared cache for the other "
+        "zpid endpoints (zestimate, priceHistory, taxHistory, photos, schools, "
+        "similarHomes)."
+    ),
+    parameters=[
+        OpenApiParameter(name='zpid', type=OpenApiTypes.INT, description='Zillow Property ID', required=True),
+    ],
+    responses={200: PropertyDetailsSerializer, 404: ErrorSerializer},
+    tags=['Properties']
+)
+@api_view(['GET'])
+def property_detail(request):
+    """Get full details for one property by zpid."""
+    zpid, error = _get_zpid(request)
+    if error:
+        return error
+    details = property_scraper.get_property_details(zpid)
+    return Response(PropertyDetailsSerializer(details).data)
+
+
+@extend_schema(
+    summary="Get property valuation (Zestimate)",
+    description="Zestimate and Rent Zestimate for a property by zpid.",
+    parameters=[
+        OpenApiParameter(name='zpid', type=OpenApiTypes.INT, description='Zillow Property ID', required=True),
+    ],
+    responses={200: ZestimateSerializer, 404: ErrorSerializer},
+    tags=['Properties']
+)
+@api_view(['GET'])
+def zestimate(request):
+    """Get valuation estimates for one property by zpid."""
+    zpid, error = _get_zpid(request)
+    if error:
+        return error
+    return Response(ZestimateSerializer(property_scraper.get_zestimate(zpid)).data)
+
+
+@extend_schema(
+    summary="Get property price history",
+    description="Chronological list of price/listing events for a property by zpid.",
+    parameters=[
+        OpenApiParameter(name='zpid', type=OpenApiTypes.INT, description='Zillow Property ID', required=True),
+    ],
+    responses={200: PriceHistoryEventSerializer(many=True), 404: ErrorSerializer},
+    tags=['Properties']
+)
+@api_view(['GET'])
+def price_history(request):
+    """Get price history for one property by zpid."""
+    zpid, error = _get_zpid(request)
+    if error:
+        return error
+    events = property_scraper.get_price_history(zpid)
+    return Response(PriceHistoryEventSerializer(events, many=True).data)
+
+
+@extend_schema(
+    summary="Get property tax history",
+    description="Per-year tax paid and assessed value for a property by zpid.",
+    parameters=[
+        OpenApiParameter(name='zpid', type=OpenApiTypes.INT, description='Zillow Property ID', required=True),
+    ],
+    responses={200: TaxHistoryEventSerializer(many=True), 404: ErrorSerializer},
+    tags=['Properties']
+)
+@api_view(['GET'])
+def tax_history(request):
+    """Get tax history for one property by zpid."""
+    zpid, error = _get_zpid(request)
+    if error:
+        return error
+    events = property_scraper.get_tax_history(zpid)
+    return Response(TaxHistoryEventSerializer(events, many=True).data)
+
+
+@extend_schema(
+    summary="Get property photos",
+    description="All photo URLs (largest available size) for a property by zpid.",
+    parameters=[
+        OpenApiParameter(name='zpid', type=OpenApiTypes.INT, description='Zillow Property ID', required=True),
+    ],
+    responses={200: inline_serializer(
+        name='PhotosResponse',
+        fields={'zpid': serializers.IntegerField(), 'count': serializers.IntegerField(),
+                'photos': serializers.ListField(child=serializers.CharField())}
+    ), 404: ErrorSerializer},
+    tags=['Properties']
+)
+@api_view(['GET'])
+def property_photos(request):
+    """Get all photo URLs for one property by zpid."""
+    zpid, error = _get_zpid(request)
+    if error:
+        return error
+    photos = property_scraper.get_property_photos(zpid)
+    return Response({'zpid': zpid, 'count': len(photos), 'photos': photos})
+
+
+@extend_schema(
+    summary="Get nearby schools",
+    description="Assigned/nearby schools with ratings for a property by zpid.",
+    parameters=[
+        OpenApiParameter(name='zpid', type=OpenApiTypes.INT, description='Zillow Property ID', required=True),
+    ],
+    responses={200: SchoolSerializer(many=True), 404: ErrorSerializer},
+    tags=['Properties']
+)
+@api_view(['GET'])
+def schools(request):
+    """Get nearby schools for one property by zpid."""
+    zpid, error = _get_zpid(request)
+    if error:
+        return error
+    return Response(SchoolSerializer(property_scraper.get_schools(zpid), many=True).data)
+
+
+@extend_schema(
+    summary="Get similar / nearby homes",
+    description="Comparable and nearby homes for a property by zpid.",
+    parameters=[
+        OpenApiParameter(name='zpid', type=OpenApiTypes.INT, description='Zillow Property ID', required=True),
+    ],
+    responses={200: PropertySerializer(many=True), 404: ErrorSerializer},
+    tags=['Properties']
+)
+@api_view(['GET'])
+def similar_homes(request):
+    """Get similar/nearby homes for one property by zpid."""
+    zpid, error = _get_zpid(request)
+    if error:
+        return error
+    return Response(PropertySerializer(property_scraper.get_similar_homes(zpid), many=True).data)
 
 
 @extend_schema(

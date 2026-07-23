@@ -83,9 +83,83 @@ class ApartmentDetailsSerializer(serializers.Serializer):
     photos = serializers.ListField(required=False, default=list)
 
 
+class PropertyDetailsSerializer(serializers.Serializer):
+    """Serializer for a single property's full details (by zpid)."""
+
+    zpid = serializers.IntegerField(required=False, allow_null=True)
+    url = serializers.CharField(required=False, allow_blank=True)
+    address = serializers.CharField(required=False, allow_blank=True)
+    price = serializers.FloatField(required=False, allow_null=True)
+    zestimate = serializers.FloatField(required=False, allow_null=True)
+    rent_zestimate = serializers.FloatField(required=False, allow_null=True)
+    price_per_sqft = serializers.FloatField(required=False, allow_null=True)
+    beds = serializers.IntegerField(required=False, allow_null=True)
+    baths = serializers.IntegerField(required=False, allow_null=True)
+    sqft = serializers.IntegerField(required=False, allow_null=True)
+    lot_size = serializers.FloatField(required=False, allow_null=True)
+    year_built = serializers.IntegerField(required=False, allow_null=True)
+    property_type = serializers.CharField(required=False, allow_blank=True)
+    status = serializers.CharField(required=False, allow_blank=True)
+    latitude = serializers.FloatField(required=False, allow_null=True)
+    longitude = serializers.FloatField(required=False, allow_null=True)
+    description = serializers.CharField(required=False, allow_blank=True)
+    brokerage = serializers.CharField(required=False, allow_blank=True)
+    mls_id = serializers.CharField(required=False, allow_blank=True)
+    mls_name = serializers.CharField(required=False, allow_blank=True)
+    hoa_fee = serializers.FloatField(required=False, allow_null=True)
+    days_on_zillow = serializers.IntegerField(required=False, allow_null=True)
+    page_view_count = serializers.IntegerField(required=False, allow_null=True)
+    favorite_count = serializers.IntegerField(required=False, allow_null=True)
+    photo_count = serializers.IntegerField(required=False, allow_null=True)
+    photo_url = serializers.CharField(required=False, allow_blank=True)
+
+
+class ZestimateSerializer(serializers.Serializer):
+    """Serializer for a property's valuation estimates."""
+
+    zpid = serializers.IntegerField(required=False, allow_null=True)
+    zestimate = serializers.FloatField(required=False, allow_null=True)
+    rent_zestimate = serializers.FloatField(required=False, allow_null=True)
+    price = serializers.FloatField(required=False, allow_null=True)
+    currency = serializers.CharField(required=False, allow_blank=True)
+
+
+class PriceHistoryEventSerializer(serializers.Serializer):
+    """Serializer for a single price-history event."""
+
+    date = serializers.CharField(required=False, allow_blank=True)
+    event = serializers.CharField(required=False, allow_blank=True)
+    price = serializers.FloatField(required=False, allow_null=True)
+    price_change_rate = serializers.FloatField(required=False, allow_null=True)
+    price_per_sqft = serializers.FloatField(required=False, allow_null=True)
+    source = serializers.CharField(required=False, allow_blank=True)
+
+
+class TaxHistoryEventSerializer(serializers.Serializer):
+    """Serializer for a single tax-history event."""
+
+    year = serializers.IntegerField(required=False, allow_null=True)
+    tax_paid = serializers.FloatField(required=False, allow_null=True)
+    tax_increase_rate = serializers.FloatField(required=False, allow_null=True)
+    assessment = serializers.FloatField(required=False, allow_null=True)
+    assessment_increase_rate = serializers.FloatField(required=False, allow_null=True)
+
+
+class SchoolSerializer(serializers.Serializer):
+    """Serializer for a nearby/assigned school."""
+
+    name = serializers.CharField(required=False, allow_blank=True)
+    rating = serializers.IntegerField(required=False, allow_null=True)
+    level = serializers.CharField(required=False, allow_blank=True)
+    grades = serializers.CharField(required=False, allow_blank=True)
+    distance = serializers.FloatField(required=False, allow_null=True)
+    type = serializers.CharField(required=False, allow_blank=True)
+    link = serializers.CharField(required=False, allow_blank=True)
+
+
 class ErrorSerializer(serializers.Serializer):
     """Serializer for error responses."""
-    
+
     error = serializers.CharField()
     message = serializers.CharField()
     status_code = serializers.IntegerField()

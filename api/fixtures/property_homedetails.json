@@ -1,0 +1,92 @@
+{
+  "zpid": 12345678,
+  "streetAddress": "123 Main St",
+  "city": "Austin",
+  "state": "TX",
+  "zipcode": "78701",
+  "price": 750000,
+  "zestimate": 762300,
+  "rentZestimate": 3400,
+  "currency": "USD",
+  "bedrooms": 4,
+  "bathrooms": 3,
+  "livingArea": 2500,
+  "livingAreaValue": 2500,
+  "lotSize": 8000,
+  "yearBuilt": 2015,
+  "homeType": "SINGLE_FAMILY",
+  "homeStatus": "FOR_SALE",
+  "latitude": 30.2672,
+  "longitude": -97.7431,
+  "description": "Beautiful home in central Austin.",
+  "daysOnZillow": 12,
+  "pageViewCount": 3400,
+  "favoriteCount": 88,
+  "monthlyHoaFee": 50,
+  "attributionInfo": {
+    "brokerName": "Acme Realty",
+    "mlsId": "ABC123",
+    "mlsName": "Austin MLS"
+  },
+  "resoFacts": {
+    "hoaFee": "50 monthly",
+    "mlsId": "ABC123"
+  },
+  "responsivePhotos": [
+    {"mixedSources": {"jpeg": [
+      {"url": "https://photos.zillowstatic.com/small_1.jpg", "width": 192},
+      {"url": "https://photos.zillowstatic.com/large_1.jpg", "width": 1536}
+    ]}},
+    {"mixedSources": {"jpeg": [
+      {"url": "https://photos.zillowstatic.com/large_2.jpg", "width": 1536}
+    ]}}
+  ],
+  "priceHistory": [
+    {"date": "2024-01-15", "event": "Listed for sale", "price": 750000, "priceChangeRate": 0.0, "pricePerSquareFoot": 300, "source": "Austin MLS"},
+    {"date": "2019-06-01", "event": "Sold", "price": 600000, "priceChangeRate": -0.05, "pricePerSquareFoot": 240, "source": "Public Record"}
+  ],
+  "taxHistory": [
+    {"time": 1672531200000, "taxPaid": 9500, "taxIncreaseRate": 0.03, "value": 700000, "valueIncreaseRate": 0.04},
+    {"time": 1640995200000, "taxPaid": 9200, "taxIncreaseRate": 0.02, "value": 672000, "valueIncreaseRate": 0.03}
+  ],
+  "schools": [
+    {"name": "Austin High School", "rating": 8, "level": "High", "grades": "9-12", "distance": 1.2, "type": "Public", "link": "https://www.zillow.com/school/x"},
+    {"name": "Central Elementary", "rating": 9, "level": "Elementary", "grades": "K-5", "distance": 0.4, "type": "Public", "link": ""}
+  ],
+  "nearbyHomes": [
+    {
+      "zpid": 22222222,
+      "streetAddress": "456 Oak Ave",
+      "city": "Austin",
+      "state": "TX",
+      "zipcode": "78701",
+      "price": 720000,
+      "bedrooms": 3,
+      "bathrooms": 2,
+      "livingArea": 2200,
+      "homeType": "SINGLE_FAMILY",
+      "homeStatus": "FOR_SALE",
+      "latitude": 30.2680,
+      "longitude": -97.7440,
+      "miniCardPhotos": [
+        {"mixedSources": {"jpeg": [{"url": "https://photos.zillowstatic.com/nearby_1.jpg", "width": 384}]}}
+      ]
+    },
+    {
+      "zpid": 33333333,
+      "streetAddress": "789 Elm St",
+      "city": "Austin",
+      "state": "TX",
+      "zipcode": "78701",
+      "price": 810000,
+      "bedrooms": 4,
+      "bathrooms": 3,
+      "livingArea": 2700,
+      "homeType": "SINGLE_FAMILY",
+      "homeStatus": "FOR_SALE",
+      "latitude": 30.2690,
+      "longitude": -97.7450,
+      "miniCardPhotos": []
+    }
+  ]
+}

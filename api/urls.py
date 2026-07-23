@@ -30,6 +30,15 @@ urlpatterns = [
     path('bypolygon', cache_page(CACHE_TTL)(views.by_polygon), name='by-polygon'),
     path('byurl', cache_page(CACHE_TTL)(views.by_url), name='by-url'),
     
+    # Property detail endpoints by zpid (Cached; all share one Zillow fetch)
+    path('property', cache_page(CACHE_TTL)(views.property_detail), name='property-detail'),
+    path('zestimate', cache_page(CACHE_TTL)(views.zestimate), name='zestimate'),
+    path('priceHistory', cache_page(CACHE_TTL)(views.price_history), name='price-history'),
+    path('taxHistory', cache_page(CACHE_TTL)(views.tax_history), name='tax-history'),
+    path('photos', cache_page(CACHE_TTL)(views.property_photos), name='property-photos'),
+    path('schools', cache_page(CACHE_TTL)(views.schools), name='schools'),
+    path('similarHomes', cache_page(CACHE_TTL)(views.similar_homes), name='similar-homes'),
+
     # Other endpoints (Cached)
     path('apartmentDetails', cache_page(CACHE_TTL)(views.apartment_details), name='apartment-details'),
     path('autocomplete', cache_page(CACHE_TTL)(views.autocomplete), name='autocomplete'),

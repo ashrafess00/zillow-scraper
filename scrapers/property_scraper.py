@@ -10,6 +10,8 @@ from urllib.parse import urlencode, quote
 
 from bs4 import BeautifulSoup
 
+from django.core.cache import cache
+
 from .base import BaseScraper, NotFoundException, ScraperException, BlockedException
 from .utils import (
     extract_json_from_script,
@@ -24,6 +26,12 @@ from .utils import (
 )
 
 logger = logging.getLogger(__name__)
+
+# The raw property object parsed out of a homedetails page is cached in Redis so
+# that all detail endpoints (/property, /zestimate, /priceHistory, ...) for the
+# same zpid share a single Zillow fetch. Matches the 15-min response cache in
+# api/urls.py — details like price/status can move, so we don't cache longer.
+PROPERTY_CACHE_TIMEOUT = 60 * 15
 
 
 class PropertyScraper(BaseScraper):
@@ -760,7 +768,274 @@ class PropertyScraper(BaseScraper):
         except Exception as e:
             logger.warning(f"Failed to parse property details: {e}")
             return None
-    
+
+    # ------------------------------------------------------------------
+    # Property details by zpid — one fetch, many endpoints
+    # ------------------------------------------------------------------
+
+    def _get_property_data(self, zpid) -> Dict[str, Any]:
+        """
+        Fetch and cache the raw Zillow `property` object for a zpid.
+
+        This is the single fetch that every detail endpoint (/property,
+        /zestimate, /priceHistory, /taxHistory, /photos, /schools,
+        /similarHomes) reads from. The parsed object is cached in Redis keyed by
+        zpid, so only the first of those calls for a given zpid hits Zillow; the
+        rest are served from cache.
+
+        Raises NotFoundException if no property object is found and
+        BlockedException if Zillow served a block/captcha page.
+        """
+        cache_key = f"property:{zpid}"
+        cached = cache.get(cache_key)
+        if cached is not None:
+            logger.info(f"Property cache HIT for zpid {zpid}")
+            return cached
+
+        url = f"{self.BASE_URL}/homedetails/{zpid}_zpid/"
+        soup = self.get_soup(url)
+
+        title = soup.find('title')
+        title_text = title.get_text().lower() if title else ''
+        if 'denied' in title_text or 'blocked' in title_text or 'captcha' in title_text:
+            logger.warning(f"Block detected for zpid {zpid}. Title: {title_text}")
+            raise BlockedException("Request blocked by Zillow - access denied")
+
+        script_data = extract_json_from_script(soup)
+        property_data = {}
+
+        if script_data:
+            component_props = script_data.get('componentProps', {})
+            gdp_cache = component_props.get('gdpClientCache', '')
+            if isinstance(gdp_cache, str) and gdp_cache:
+                try:
+                    gdp_data = json.loads(gdp_cache)
+                    for value in gdp_data.values():
+                        if isinstance(value, dict) and value.get('property'):
+                            property_data = value['property']
+                            break
+                except json.JSONDecodeError:
+                    pass
+
+            # Fallback to older flat structures.
+            if not property_data:
+                property_data = (
+                    script_data.get('property', {}) or
+                    script_data.get('propertyDetails', {}) or
+                    {}
+                )
+
+        if not property_data:
+            raise NotFoundException(f"No property found for zpid {zpid}")
+
+        # Ensure the zpid is always present on the cached object.
+        property_data.setdefault('zpid', self._coerce_int(zpid))
+
+        cache.set(cache_key, property_data, PROPERTY_CACHE_TIMEOUT)
+        logger.info(f"Cached property data for zpid {zpid}")
+        return property_data
+
+    @staticmethod
+    def _coerce_int(value) -> Optional[int]:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _build_address(data: Dict) -> str:
+        """Build a 'street, city, state zip' address from a property-like dict."""
+        addr = data.get('address')
+        if isinstance(addr, dict):
+            street = addr.get('streetAddress', '')
+            city = addr.get('city', '')
+            state = addr.get('state', '')
+            zipcode = addr.get('zipcode', '')
+        else:
+            street = data.get('streetAddress', '')
+            city = data.get('city', '')
+            state = data.get('state', '')
+            zipcode = data.get('zipcode', '')
+        parts = [p for p in (street, city, state, zipcode) if p]
+        if parts:
+            return ', '.join(parts)
+        return addr if isinstance(addr, str) else data.get('address', '') or ''
+
+    @staticmethod
+    def _photo_urls_from(photo_list) -> List[str]:
+        """Extract the largest jpeg URL from a Zillow photo array."""
+        urls = []
+        for photo in photo_list or []:
+            if isinstance(photo, dict):
+                mixed = photo.get('mixedSources') or {}
+                jpeg = mixed.get('jpeg') or []
+                if jpeg:
+                    urls.append(jpeg[-1].get('url', ''))
+                elif photo.get('url'):
+                    urls.append(photo.get('url'))
+            elif isinstance(photo, str):
+                urls.append(photo)
+        return [u for u in urls if u]
+
+    def get_property_details(self, zpid) -> Dict[str, Any]:
+        """Return a rich, flat details object for a single property."""
+        data = self._get_property_data(zpid)
+
+        price = clean_price(data.get('price'))
+        sqft = data.get('livingArea') or data.get('livingAreaValue')
+        photos = self._photo_urls_from(
+            data.get('responsivePhotos') or data.get('photos') or
+            data.get('hugePhotos') or data.get('originalPhotos')
+        )
+        reso = data.get('resoFacts') or {}
+        attribution = data.get('attributionInfo') or {}
+
+        price_per_sqft = None
+        if price and sqft:
+            try:
+                price_per_sqft = round(price / float(sqft), 2)
+            except (TypeError, ValueError, ZeroDivisionError):
+                price_per_sqft = None
+
+        return {
+            'zpid': self._coerce_int(data.get('zpid') or zpid),
+            'url': f"{self.BASE_URL}/homedetails/{data.get('zpid') or zpid}_zpid/",
+            'address': self._build_address(data),
+            'price': price,
+            'zestimate': clean_price(data.get('zestimate')),
+            'rent_zestimate': clean_price(data.get('rentZestimate')),
+            'price_per_sqft': price_per_sqft,
+            'beds': data.get('bedrooms') or data.get('beds'),
+            'baths': data.get('bathrooms') or data.get('baths'),
+            'sqft': self._coerce_int(sqft),
+            'lot_size': data.get('lotSize') or data.get('lotAreaValue'),
+            'year_built': data.get('yearBuilt'),
+            'property_type': data.get('homeType', ''),
+            'status': data.get('homeStatus', ''),
+            'latitude': data.get('latitude'),
+            'longitude': data.get('longitude'),
+            'description': clean_text(data.get('description', '') or ''),
+            'brokerage': (attribution.get('brokerName') or
+                          data.get('brokerageName') or ''),
+            'mls_id': attribution.get('mlsId') or reso.get('mlsId') or '',
+            'mls_name': attribution.get('mlsName') or '',
+            # resoFacts.hoaFee is often a string like "$50 monthly" — normalize.
+            'hoa_fee': clean_price(reso.get('hoaFee') or data.get('monthlyHoaFee')),
+            'days_on_zillow': data.get('daysOnZillow'),
+            'page_view_count': data.get('pageViewCount'),
+            'favorite_count': data.get('favoriteCount'),
+            'photo_count': len(photos),
+            'photo_url': photos[0] if photos else '',
+        }
+
+    def get_zestimate(self, zpid) -> Dict[str, Any]:
+        """Return valuation estimates for a property."""
+        data = self._get_property_data(zpid)
+        return {
+            'zpid': self._coerce_int(data.get('zpid') or zpid),
+            'zestimate': clean_price(data.get('zestimate')),
+            'rent_zestimate': clean_price(data.get('rentZestimate')),
+            'price': clean_price(data.get('price')),
+            'currency': data.get('currency', 'USD'),
+        }
+
+    def get_price_history(self, zpid) -> List[Dict[str, Any]]:
+        """Return the list of price/listing events for a property."""
+        data = self._get_property_data(zpid)
+        events = []
+        for item in data.get('priceHistory') or []:
+            if not isinstance(item, dict):
+                continue
+            events.append({
+                'date': item.get('date', ''),
+                'event': item.get('event', ''),
+                'price': clean_price(item.get('price')),
+                'price_change_rate': item.get('priceChangeRate'),
+                'price_per_sqft': clean_price(item.get('pricePerSquareFoot')),
+                'source': item.get('source', ''),
+            })
+        return events
+
+    def get_tax_history(self, zpid) -> List[Dict[str, Any]]:
+        """Return the list of tax-assessment events for a property."""
+        from datetime import datetime, timezone as dt_timezone
+
+        data = self._get_property_data(zpid)
+        events = []
+        for item in data.get('taxHistory') or []:
+            if not isinstance(item, dict):
+                continue
+            year = None
+            epoch_ms = item.get('time')
+            if epoch_ms:
+                try:
+                    year = datetime.fromtimestamp(
+                        int(epoch_ms) / 1000, tz=dt_timezone.utc
+                    ).year
+                except (TypeError, ValueError, OverflowError, OSError):
+                    year = None
+            events.append({
+                'year': year,
+                'tax_paid': clean_price(item.get('taxPaid')),
+                'tax_increase_rate': item.get('taxIncreaseRate'),
+                'assessment': clean_price(item.get('value')),
+                'assessment_increase_rate': item.get('valueIncreaseRate'),
+            })
+        return events
+
+    def get_property_photos(self, zpid) -> List[str]:
+        """Return all photo URLs for a property (largest available size)."""
+        data = self._get_property_data(zpid)
+        return self._photo_urls_from(
+            data.get('responsivePhotos') or data.get('photos') or
+            data.get('hugePhotos') or data.get('originalPhotos')
+        )
+
+    def get_schools(self, zpid) -> List[Dict[str, Any]]:
+        """Return nearby/assigned schools for a property."""
+        data = self._get_property_data(zpid)
+        schools = []
+        for item in data.get('schools') or []:
+            if not isinstance(item, dict):
+                continue
+            schools.append({
+                'name': item.get('name', ''),
+                'rating': item.get('rating'),
+                'level': item.get('level', ''),
+                'grades': item.get('grades', ''),
+                'distance': item.get('distance'),
+                'type': item.get('type', ''),
+                'link': item.get('link', ''),
+            })
+        return schools
+
+    def get_similar_homes(self, zpid) -> List[Dict[str, Any]]:
+        """Return comparable / nearby homes as property cards."""
+        data = self._get_property_data(zpid)
+        homes = data.get('nearbyHomes') or data.get('comps') or []
+        results = []
+        for home in homes:
+            if not isinstance(home, dict) or not home.get('zpid'):
+                continue
+            photos = self._photo_urls_from(
+                home.get('miniCardPhotos') or home.get('photos')
+            )
+            results.append({
+                'zpid': self._coerce_int(home.get('zpid')),
+                'address': self._build_address(home),
+                'url': f"{self.BASE_URL}/homedetails/{home.get('zpid')}_zpid/",
+                'photo_url': photos[0] if photos else '',
+                'price': clean_price(home.get('price')),
+                'beds': home.get('bedrooms') or home.get('beds'),
+                'baths': home.get('bathrooms') or home.get('baths'),
+                'sqft': self._coerce_int(home.get('livingArea')),
+                'property_type': home.get('homeType', ''),
+                'status': home.get('homeStatus', ''),
+                'latitude': home.get('latitude'),
+                'longitude': home.get('longitude'),
+            })
+        return results
+
     def get_apartment_details(self, url: str) -> Dict:
         """
         Get apartment/building details.

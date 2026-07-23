@@ -226,5 +226,184 @@ class RapidAPIOnlyMiddlewareTests(APITestCase):
         with override_settings(RAPIDAPI_PROXY_SECRET=''):
             with patch('scrapers.property_scraper.property_scraper.autocomplete', return_value=[]):
                 response = self.client.get('/autocomplete', {'q': 'los'})
-        
+
         self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+
+LOCMEM_CACHE = {'default': {'BACKEND': 'django.core.cache.backends.locmem.LocMemCache'}}
+
+
+def _load_property_fixture():
+    """Load the synthetic homedetails property object used by the detail tests."""
+    import json
+    from pathlib import Path
+    path = Path(__file__).resolve().parent / 'fixtures' / 'property_homedetails.json'
+    with open(path, encoding='utf-8') as f:
+        return json.load(f)
+
+
+def _homedetails_soup(property_obj):
+    """Build a BeautifulSoup homedetails page embedding property_obj in gdpClientCache."""
+    import json
+    from bs4 import BeautifulSoup
+    gdp = json.dumps({'Property': {'property': property_obj}})
+    next_data = json.dumps({'props': {'pageProps': {'componentProps': {'gdpClientCache': gdp}}}})
+    html = (
+        '<html><head><title>123 Main St | Zillow</title>'
+        '<script id="__NEXT_DATA__" type="application/json">' + next_data + '</script>'
+        '</head><body></body></html>'
+    )
+    return BeautifulSoup(html, 'html.parser')
+
+
+@override_settings(CACHES=LOCMEM_CACHE)
+class PropertyDetailScraperTests(TestCase):
+    """Tests for the zpid-based property detail parsers."""
+
+    def setUp(self):
+        from django.core.cache import cache
+        cache.clear()
+        self.fixture = _load_property_fixture()
+
+    def _scraper(self):
+        from scrapers.property_scraper import property_scraper
+        return property_scraper
+
+    def test_get_property_data_extracts_and_caches(self):
+        """One fetch warms the cache; a second call does not re-fetch."""
+        scraper = self._scraper()
+        soup = _homedetails_soup(self.fixture)
+        with patch.object(scraper, 'get_soup', return_value=soup) as mock_soup:
+            first = scraper._get_property_data(12345678)
+            second = scraper._get_property_data(12345678)
+
+        self.assertEqual(first['zpid'], 12345678)
+        self.assertEqual(second['zpid'], 12345678)
+        self.assertEqual(mock_soup.call_count, 1)  # second served from cache
+
+    def test_get_property_data_not_found(self):
+        """A page with no property object raises NotFoundException."""
+        from scrapers.base import NotFoundException
+        from bs4 import BeautifulSoup
+        scraper = self._scraper()
+        empty = BeautifulSoup('<html><head><title>x</title></head></html>', 'html.parser')
+        with patch.object(scraper, 'get_soup', return_value=empty):
+            with self.assertRaises(NotFoundException):
+                scraper._get_property_data(999)
+
+    def test_get_property_details_mapping(self):
+        from api.serializers import PropertyDetailsSerializer
+        scraper = self._scraper()
+        with patch.object(scraper, '_get_property_data', return_value=self.fixture):
+            d = scraper.get_property_details(12345678)
+        self.assertEqual(d['zpid'], 12345678)
+        self.assertEqual(d['address'], '123 Main St, Austin, TX, 78701')
+        self.assertEqual(d['price'], 750000)
+        self.assertEqual(d['zestimate'], 762300)
+        self.assertEqual(d['beds'], 4)
+        self.assertEqual(d['price_per_sqft'], 300.0)
+        self.assertEqual(d['photo_count'], 2)
+        self.assertEqual(d['photo_url'], 'https://photos.zillowstatic.com/large_1.jpg')
+        self.assertEqual(d['brokerage'], 'Acme Realty')
+        self.assertEqual(d['hoa_fee'], 50)  # parsed from the string "50 monthly"
+        # The parser output must serialize cleanly (guards against type mismatches).
+        self.assertEqual(PropertyDetailsSerializer(d).data['hoa_fee'], 50.0)
+
+    def test_get_zestimate(self):
+        scraper = self._scraper()
+        with patch.object(scraper, '_get_property_data', return_value=self.fixture):
+            z = scraper.get_zestimate(12345678)
+        self.assertEqual(z['zestimate'], 762300)
+        self.assertEqual(z['rent_zestimate'], 3400)
+
+    def test_get_price_history(self):
+        scraper = self._scraper()
+        with patch.object(scraper, '_get_property_data', return_value=self.fixture):
+            events = scraper.get_price_history(12345678)
+        self.assertEqual(len(events), 2)
+        self.assertEqual(events[0]['event'], 'Listed for sale')
+        self.assertEqual(events[0]['price'], 750000)
+
+    def test_get_tax_history_year_from_epoch(self):
+        scraper = self._scraper()
+        with patch.object(scraper, '_get_property_data', return_value=self.fixture):
+            events = scraper.get_tax_history(12345678)
+        self.assertEqual(len(events), 2)
+        self.assertEqual(events[0]['year'], 2023)
+        self.assertEqual(events[0]['tax_paid'], 9500)
+
+    def test_get_property_photos(self):
+        scraper = self._scraper()
+        with patch.object(scraper, '_get_property_data', return_value=self.fixture):
+            photos = scraper.get_property_photos(12345678)
+        self.assertEqual(photos, [
+            'https://photos.zillowstatic.com/large_1.jpg',
+            'https://photos.zillowstatic.com/large_2.jpg',
+        ])
+
+    def test_get_schools(self):
+        scraper = self._scraper()
+        with patch.object(scraper, '_get_property_data', return_value=self.fixture):
+            result = scraper.get_schools(12345678)
+        self.assertEqual(len(result), 2)
+        self.assertEqual(result[0]['name'], 'Austin High School')
+        self.assertEqual(result[0]['rating'], 8)
+
+    def test_get_similar_homes(self):
+        scraper = self._scraper()
+        with patch.object(scraper, '_get_property_data', return_value=self.fixture):
+            homes = scraper.get_similar_homes(12345678)
+        self.assertEqual(len(homes), 2)
+        self.assertEqual(homes[0]['zpid'], 22222222)
+        self.assertEqual(homes[0]['address'], '456 Oak Ave, Austin, TX, 78701')
+        self.assertEqual(homes[0]['photo_url'], 'https://photos.zillowstatic.com/nearby_1.jpg')
+
+
+@override_settings(CACHES=LOCMEM_CACHE)
+class PropertyDetailEndpointTests(APITestCase):
+    """Tests for the zpid-based property detail endpoints (routing + validation)."""
+
+    def setUp(self):
+        # cache_page() writes to the default cache, which Django does NOT isolate
+        # between tests/runs. Use an in-process cache and clear it so a cached
+        # response never masks a later call.
+        from django.core.cache import cache
+        cache.clear()
+
+    def test_property_requires_zpid(self):
+        response = self.client.get('/property')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['status_code'], 400)
+
+    def test_property_rejects_non_integer_zpid(self):
+        response = self.client.get('/property', {'zpid': 'abc'})
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['status_code'], 400)
+
+    @patch('api.views.property_scraper')
+    def test_property_detail(self, mock_scraper):
+        mock_scraper.get_property_details.return_value = {
+            'zpid': 12345678, 'address': '123 Main St', 'price': 750000.0,
+        }
+        response = self.client.get('/property', {'zpid': '12345678'})
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['zpid'], 12345678)
+        mock_scraper.get_property_details.assert_called_once_with(12345678)
+
+    @patch('api.views.property_scraper')
+    def test_photos_endpoint(self, mock_scraper):
+        mock_scraper.get_property_photos.return_value = ['a.jpg', 'b.jpg']
+        response = self.client.get('/photos', {'zpid': '12345678'})
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['count'], 2)
+        self.assertEqual(response.data['photos'], ['a.jpg', 'b.jpg'])
+
+    @patch('api.views.property_scraper')
+    def test_similar_homes_endpoint(self, mock_scraper):
+        mock_scraper.get_similar_homes.return_value = [
+            {'zpid': 22222222, 'address': '456 Oak Ave', 'price': 720000.0},
+        ]
+        response = self.client.get('/similarHomes', {'zpid': '12345678'})
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data), 1)
+        self.assertEqual(response.data[0]['zpid'], 22222222)
