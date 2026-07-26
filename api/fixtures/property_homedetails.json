@@ -23,14 +23,106 @@
   "pageViewCount": 3400,
   "favoriteCount": 88,
   "monthlyHoaFee": 50,
+  "timeOnZillow": "12 days",
+  "listingTypeDimension": "For Sale by Agent",
+  "priceChange": -15000,
+  "priceChangeDateString": "2024-03-01",
+  "dateSold": 1751241600000,
+  "lastSoldPrice": null,
+  "contingentListingType": null,
+  "propertyTaxRate": 1.46,
+  "parcelId": "862650",
+  "county": "Travis County",
+  "countyFIPS": "48453",
   "attributionInfo": {
+    "agentName": "Enrique Cordova",
+    "agentPhoneNumber": "(512) 744-5275",
+    "agentEmail": null,
+    "agentLicenseNumber": null,
+    "coAgentName": null,
+    "coAgentNumber": null,
+    "coAgentLicenseNumber": null,
     "brokerName": "Acme Realty",
+    "brokerPhoneNumber": "(877) 366-2213",
+    "buyerAgentName": null,
+    "buyerBrokerageName": null,
+    "listingOffices": [
+      {"associatedOfficeType": "listOffice", "officeName": "Acme Realty"}
+    ],
+    "listingAgentAttributionContact": "(512) 744-5275",
+    "mlsDisclaimer": "Based on information from the Austin MLS.",
+    "lastUpdated": "2024-03-02 09:49:10",
+    "lastChecked": "2024-03-03 14:06:49",
     "mlsId": "ABC123",
     "mlsName": "Austin MLS"
   },
+  "listedBy": [
+    {"id": "LISTING_AGENT", "elements": [
+      {"id": "NAME", "text": "Enrique Cordova"},
+      {"id": "PHONE", "text": "(512) 744-5275"}
+    ]},
+    {"id": "BROKER", "elements": [
+      {"id": "NAME", "text": "Acme Realty"},
+      {"id": "PHONE", "text": "(877) 366-2213"}
+    ]},
+    {"id": "CO_LISTING_AGENT", "elements": [
+      {"id": "NAME", "text": "Lesley Estes"},
+      {"id": "PHONE", "text": "(361) 354-0566"}
+    ]}
+  ],
+  "listing_sub_type": {
+    "is_FSBO": false,
+    "is_FSBA": true,
+    "is_newHome": false,
+    "is_forAuction": false,
+    "is_comingSoon": false,
+    "is_foreclosure": false,
+    "is_bankOwned": false,
+    "is_pending": false
+  },
+  "mortgageZHLRates": {
+    "thirtyYearFixedBucket": {"rate": 7.07, "rateSource": "ZGMI", "lastUpdated": 1785013844056},
+    "fifteenYearFixedBucket": {"rate": 6.424, "rateSource": "ZGMI", "lastUpdated": 1785013844056},
+    "arm5Bucket": {"rate": null, "rateSource": "ZGMI", "lastUpdated": 1785013844056}
+  },
+  "openHouseSchedule": [
+    {
+      "startTime": 1709733600000,
+      "endTime": 1709740800000,
+      "description": "Refreshments provided",
+      "openHouse": "Sun. 12-2pm"
+    }
+  ],
+  "nearbyCities": [
+    {"regionUrl": {"path": "/austin-tx/"}, "name": "Austin", "body": null},
+    {"regionUrl": {"path": "/round-rock-tx/"}, "name": "Round Rock", "body": null}
+  ],
+  "nearbyNeighborhoods": [
+    {"regionUrl": {"path": "/downtown-austin-tx/"}, "name": "Downtown", "body": null}
+  ],
+  "nearbyZipcodes": [
+    {"regionUrl": {"path": "/austin-tx-78704/"}, "name": "78704", "body": null}
+  ],
   "resoFacts": {
-    "hoaFee": "50 monthly",
-    "mlsId": "ABC123"
+    "hoaFee": "$300 semi-annually",
+    "hoaFeeTotal": "$300 semi-annually",
+    "mlsId": "ABC123",
+    "taxAnnualAmount": 10950,
+    "taxAssessedValue": 730000,
+    "zoning": "SF-3",
+    "zoningDescription": "Single Family Residence",
+    "parcelNumber": "862650",
+    "appliances": ["Dishwasher", "Microwave"],
+    "cooling": ["Central Air"],
+    "heating": ["Central"],
+    "flooring": null,
+    "attic": "",
+    "buildingFeatures": [],
+    "atAGlanceFacts": [
+      {"factLabel": "Type", "factValue": "Single Family Residence"},
+      {"factLabel": "Year Built", "factValue": "2015"},
+      {"factLabel": "HOA", "factValue": "$300 semi-annually"}
+    ]
   },
   "responsivePhotos": [
     {"mixedSources": {"jpeg": [

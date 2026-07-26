@@ -21,6 +21,13 @@ from .serializers import (
     PriceHistoryEventSerializer,
     TaxHistoryEventSerializer,
     SchoolSerializer,
+    OpenHouseSerializer,
+    ListingAgentSerializer,
+    MonthlyCostSerializer,
+    HomeFactsSerializer,
+    TaxAssessmentSerializer,
+    NearbyAreasSerializer,
+    ListingStatusSerializer,
     ErrorSerializer,
     PaginationMetadataSerializer,
 )
@@ -800,6 +807,34 @@ def _get_zpid(request):
         )
 
 
+def _get_float(request, param, default, minimum=None, maximum=None):
+    """
+    Pull an optional float query param, validated against an inclusive range.
+
+    Returns (value, None) on success or (None, error_response) using the same
+    HTTP-200 validation-error body as _get_zpid.
+    """
+    raw = request.query_params.get(param)
+    if raw in (None, ''):
+        return default, None
+
+    def bad(message):
+        return None, Response(
+            {'error': 'Bad Request', 'message': message, 'status_code': 400},
+            status=status.HTTP_200_OK
+        )
+
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return bad(f'{param} must be a number')
+    if minimum is not None and value < minimum:
+        return bad(f'{param} must be >= {minimum}')
+    if maximum is not None and value > maximum:
+        return bad(f'{param} must be <= {maximum}')
+    return value, None
+
+
 @extend_schema(
     summary="Get property details",
     description=(
@@ -937,6 +972,181 @@ def similar_homes(request):
     if error:
         return error
     return Response(PropertySerializer(property_scraper.get_similar_homes(zpid), many=True).data)
+
+
+ZPID_PARAM = OpenApiParameter(
+    name='zpid', type=OpenApiTypes.INT, description='Zillow Property ID', required=True
+)
+
+
+@extend_schema(
+    summary="Get open house schedule",
+    description=(
+        "Scheduled open houses for a property by zpid. Most listings have none; "
+        "an empty list means no upcoming open house, not an error."
+    ),
+    parameters=[ZPID_PARAM],
+    responses={200: OpenHouseSerializer(many=True), 404: ErrorSerializer},
+    tags=['Properties']
+)
+@api_view(['GET'])
+def open_houses(request):
+    """Get the open house schedule for one property by zpid."""
+    zpid, error = _get_zpid(request)
+    if error:
+        return error
+    events = property_scraper.get_open_houses(zpid)
+    return Response(OpenHouseSerializer(events, many=True).data)
+
+
+@extend_schema(
+    summary="Get listing agent and broker",
+    description=(
+        "Listing agent, co-listing agent, broker and MLS attribution for a "
+        "property by zpid — names, phone numbers, licenses and MLS id."
+    ),
+    parameters=[ZPID_PARAM],
+    responses={200: ListingAgentSerializer, 404: ErrorSerializer},
+    tags=['Properties']
+)
+@api_view(['GET'])
+def listing_agent(request):
+    """Get listing agent / broker attribution for one property by zpid."""
+    zpid, error = _get_zpid(request)
+    if error:
+        return error
+    return Response(ListingAgentSerializer(property_scraper.get_listing_agent(zpid)).data)
+
+
+@extend_schema(
+    summary="Get estimated monthly cost",
+    description=(
+        "Estimated monthly ownership cost for a property by zpid: principal & "
+        "interest amortized from Zillow's live mortgage rate, property tax, HOA, "
+        "plus estimated home insurance and PMI. Fields Zillow does not publish "
+        "are listed in `estimated_fields`."
+    ),
+    parameters=[
+        ZPID_PARAM,
+        OpenApiParameter(name='downPayment', type=OpenApiTypes.NUMBER, required=False,
+                         description='Down payment as a percent of price (default 20)'),
+        OpenApiParameter(name='termYears', type=OpenApiTypes.INT, required=False,
+                         description='Loan term in years: 30 or 15 (default 30)'),
+        OpenApiParameter(name='interestRate', type=OpenApiTypes.NUMBER, required=False,
+                         description="Annual interest rate percent; overrides Zillow's live rate"),
+    ],
+    responses={200: MonthlyCostSerializer, 404: ErrorSerializer},
+    tags=['Properties']
+)
+@api_view(['GET'])
+def monthly_cost(request):
+    """Get an estimated monthly cost breakdown for one property by zpid."""
+    zpid, error = _get_zpid(request)
+    if error:
+        return error
+
+    down_payment, error = _get_float(request, 'downPayment', 20.0, 0, 100)
+    if error:
+        return error
+    interest_rate, error = _get_float(request, 'interestRate', None, 0, 100)
+    if error:
+        return error
+
+    term_raw = request.query_params.get('termYears', '30')
+    if str(term_raw) not in ('30', '15'):
+        return Response(
+            {'error': 'Bad Request', 'message': 'termYears must be 30 or 15',
+             'status_code': 400},
+            status=status.HTTP_200_OK
+        )
+
+    return Response(MonthlyCostSerializer(property_scraper.get_monthly_cost(
+        zpid,
+        down_payment_percent=down_payment,
+        term_years=int(term_raw),
+        interest_rate=interest_rate,
+    )).data)
+
+
+@extend_schema(
+    summary="Get full home facts (RESO)",
+    description=(
+        "The complete RESO facts block for a property by zpid — appliances, "
+        "heating, cooling, flooring, construction, parking, utilities, HOA and "
+        "more. Null fields are omitted, so the key set varies by listing."
+    ),
+    parameters=[ZPID_PARAM],
+    responses={200: HomeFactsSerializer, 404: ErrorSerializer},
+    tags=['Properties']
+)
+@api_view(['GET'])
+def home_facts(request):
+    """Get the full RESO facts block for one property by zpid."""
+    zpid, error = _get_zpid(request)
+    if error:
+        return error
+    return Response(HomeFactsSerializer(property_scraper.get_home_facts(zpid)).data)
+
+
+@extend_schema(
+    summary="Get current tax assessment",
+    description=(
+        "Current-year tax assessment and parcel identifiers for a property by "
+        "zpid: assessed value, annual tax, county rate, parcel id, county FIPS "
+        "and zoning. Use /taxHistory for the year-by-year series."
+    ),
+    parameters=[ZPID_PARAM],
+    responses={200: TaxAssessmentSerializer, 404: ErrorSerializer},
+    tags=['Properties']
+)
+@api_view(['GET'])
+def tax_assessment(request):
+    """Get the current tax assessment for one property by zpid."""
+    zpid, error = _get_zpid(request)
+    if error:
+        return error
+    return Response(TaxAssessmentSerializer(property_scraper.get_tax_assessment(zpid)).data)
+
+
+@extend_schema(
+    summary="Get nearby cities, neighborhoods and zipcodes",
+    description=(
+        "Regions Zillow links from a listing by zpid. Each entry includes the "
+        "Zillow region path, which can be passed straight to /bylocation or "
+        "/byurl to widen a search."
+    ),
+    parameters=[ZPID_PARAM],
+    responses={200: NearbyAreasSerializer, 404: ErrorSerializer},
+    tags=['Properties']
+)
+@api_view(['GET'])
+def nearby_areas(request):
+    """Get nearby cities/neighborhoods/zipcodes for one property by zpid."""
+    zpid, error = _get_zpid(request)
+    if error:
+        return error
+    return Response(NearbyAreasSerializer(property_scraper.get_nearby_areas(zpid)).data)
+
+
+@extend_schema(
+    summary="Get listing status and price changes",
+    description=(
+        "Listing status, price-cut tracking and listing-type flags for a "
+        "property by zpid — most recent price change and date, days on Zillow, "
+        "and FSBO / foreclosure / auction / new-build / coming-soon / pending "
+        "booleans."
+    ),
+    parameters=[ZPID_PARAM],
+    responses={200: ListingStatusSerializer, 404: ErrorSerializer},
+    tags=['Properties']
+)
+@api_view(['GET'])
+def listing_status(request):
+    """Get listing status and price-change tracking for one property by zpid."""
+    zpid, error = _get_zpid(request)
+    if error:
+        return error
+    return Response(ListingStatusSerializer(property_scraper.get_listing_status(zpid)).data)
 
 
 @extend_schema(

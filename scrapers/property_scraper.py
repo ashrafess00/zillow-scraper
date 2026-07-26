@@ -33,6 +33,24 @@ logger = logging.getLogger(__name__)
 # api/urls.py — details like price/status can move, so we don't cache longer.
 PROPERTY_CACHE_TIMEOUT = 60 * 15
 
+# HOA fees arrive two ways: `monthlyHoaFee` (already monthly, preferred) or a
+# resoFacts string like "$529 semi-annually" that must be normalized to monthly.
+HOA_PERIOD_DIVISORS = {
+    'annually': 12.0, 'annual': 12.0, 'yearly': 12.0, 'year': 12.0,
+    'semi-annually': 6.0, 'semiannually': 6.0, 'semi annually': 6.0,
+    'quarterly': 3.0, 'quarter': 3.0,
+    'bi-monthly': 2.0, 'bimonthly': 2.0,
+    'monthly': 1.0, 'month': 1.0,
+}
+
+# Zillow does not ship a homeowners-insurance figure on the property object, so
+# /monthlyCost estimates it at this share of price per year (Zillow's own
+# calculator default). Flagged as an estimate in the response.
+INSURANCE_RATE_ANNUAL = 0.0035
+
+# Annual PMI as a share of the loan, applied only when down payment < 20%.
+PMI_RATE_ANNUAL = 0.005
+
 # Friendly sort names → Zillow searchQueryState.sortSelection tokens.
 # Unknown values are passed through unchanged (Zillow ignores tokens it doesn't
 # recognize, so this fails soft). Tokens beyond "days"/"globalrelevanceex" are
@@ -940,6 +958,33 @@ class PropertyScraper(BaseScraper):
                 urls.append(photo)
         return [u for u in urls if u]
 
+    @staticmethod
+    def _hoa_monthly(data: Dict) -> Optional[float]:
+        """
+        Return the HOA fee normalized to a monthly amount.
+
+        `monthlyHoaFee` is already monthly and is preferred. The resoFacts
+        fallback is a string carrying its own period ("$529 semi-annually"), so
+        parsing the number alone would overstate the monthly cost 6x.
+        """
+        monthly = clean_price(data.get('monthlyHoaFee'))
+        if monthly is not None:
+            return monthly
+
+        reso = data.get('resoFacts') or {}
+        raw = reso.get('hoaFee') or reso.get('hoaFeeTotal')
+        amount = clean_price(raw)
+        if amount is None:
+            return None
+
+        text = str(raw).lower()
+        # Longest label first: "annually" is a substring of "semi-annually", so
+        # matching in dict order would divide a semi-annual fee by 12, not 6.
+        for period in sorted(HOA_PERIOD_DIVISORS, key=len, reverse=True):
+            if period in text:
+                return round(amount / HOA_PERIOD_DIVISORS[period], 2)
+        return amount
+
     def get_property_details(self, zpid) -> Dict[str, Any]:
         """Return a rich, flat details object for a single property."""
         data = self._get_property_data(zpid)
@@ -982,8 +1027,9 @@ class PropertyScraper(BaseScraper):
                           data.get('brokerageName') or ''),
             'mls_id': attribution.get('mlsId') or reso.get('mlsId') or '',
             'mls_name': attribution.get('mlsName') or '',
-            # resoFacts.hoaFee is often a string like "$50 monthly" — normalize.
-            'hoa_fee': clean_price(reso.get('hoaFee') or data.get('monthlyHoaFee')),
+            # resoFacts.hoaFee is a string carrying its own period ("$529
+            # semi-annually") — normalize everything to a monthly figure.
+            'hoa_fee': self._hoa_monthly(data),
             'days_on_zillow': data.get('daysOnZillow'),
             'page_view_count': data.get('pageViewCount'),
             'favorite_count': data.get('favoriteCount'),
@@ -1098,6 +1144,322 @@ class PropertyScraper(BaseScraper):
                 'longitude': home.get('longitude'),
             })
         return results
+
+    # ------------------------------------------------------------------
+    # Additional detail endpoints — all read the same cached property object
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _epoch_or_text(value) -> str:
+        """Render a Zillow time value (epoch ms, epoch s, or string) as ISO/text."""
+        from datetime import datetime, timezone as dt_timezone
+
+        if value in (None, ''):
+            return ''
+        if isinstance(value, str):
+            return value
+        try:
+            epoch = int(value)
+        except (TypeError, ValueError):
+            return str(value)
+        # Zillow mixes seconds and milliseconds; anything this large is ms.
+        if epoch > 10_000_000_000:
+            epoch = epoch / 1000
+        try:
+            return datetime.fromtimestamp(
+                epoch, tz=dt_timezone.utc
+            ).isoformat().replace('+00:00', 'Z')
+        except (ValueError, OverflowError, OSError):
+            return str(value)
+
+    def get_open_houses(self, zpid) -> List[Dict[str, Any]]:
+        """
+        Return the scheduled open houses for a property.
+
+        `openHouseSchedule` is present on every listing but is an empty list for
+        the large majority of them (only listings with an upcoming open house
+        populate it). Key spellings differ between the detail page and the
+        search cards, so every known variant is checked.
+        """
+        data = self._get_property_data(zpid)
+        events = []
+        for item in data.get('openHouseSchedule') or []:
+            if not isinstance(item, dict):
+                continue
+            start = (item.get('startTime') or item.get('open_house_start') or
+                     item.get('openHouseStartDate') or item.get('start'))
+            end = (item.get('endTime') or item.get('open_house_end') or
+                   item.get('openHouseEndDate') or item.get('end'))
+            events.append({
+                'start_time': self._epoch_or_text(start),
+                'end_time': self._epoch_or_text(end),
+                'description': clean_text(
+                    item.get('description') or item.get('openHouseDescription') or ''
+                ),
+                'display_text': item.get('openHouse') or item.get('displayText') or '',
+            })
+        return events
+
+    def get_listing_agent(self, zpid) -> Dict[str, Any]:
+        """
+        Return the listing agent, co-agent, broker and MLS attribution.
+
+        `attributionInfo` is the authoritative source; `listedBy` is a
+        display-oriented list of {id, elements:[{id, text}]} groups used as a
+        fallback when attributionInfo omits a name or phone.
+        """
+        data = self._get_property_data(zpid)
+        attribution = data.get('attributionInfo') or {}
+
+        # Flatten listedBy into {GROUP_ID: {FIELD_ID: text}} for fallbacks.
+        listed_by: Dict[str, Dict[str, str]] = {}
+        for group in data.get('listedBy') or []:
+            if not isinstance(group, dict) or not group.get('id'):
+                continue
+            fields = {}
+            for element in group.get('elements') or []:
+                if isinstance(element, dict) and element.get('id'):
+                    fields[element['id']] = element.get('text') or ''
+            listed_by[group['id']] = fields
+
+        def fallback(group_id, field, default=''):
+            return listed_by.get(group_id, {}).get(field) or default
+
+        offices = [
+            o.get('officeName', '') for o in attribution.get('listingOffices') or []
+            if isinstance(o, dict) and o.get('officeName')
+        ]
+
+        return {
+            'zpid': self._coerce_int(data.get('zpid') or zpid),
+            'agent_name': attribution.get('agentName') or fallback('LISTING_AGENT', 'NAME'),
+            'agent_phone': (attribution.get('agentPhoneNumber') or
+                            fallback('LISTING_AGENT', 'PHONE')),
+            'agent_email': attribution.get('agentEmail') or '',
+            'agent_license': attribution.get('agentLicenseNumber') or '',
+            'co_agent_name': attribution.get('coAgentName') or fallback('CO_LISTING_AGENT', 'NAME'),
+            'co_agent_phone': (attribution.get('coAgentNumber') or
+                               fallback('CO_LISTING_AGENT', 'PHONE')),
+            'co_agent_license': attribution.get('coAgentLicenseNumber') or '',
+            'broker_name': (attribution.get('brokerName') or
+                            data.get('brokerageName') or fallback('BROKER', 'NAME')),
+            'broker_phone': attribution.get('brokerPhoneNumber') or fallback('BROKER', 'PHONE'),
+            'listing_offices': offices,
+            'buyer_agent_name': attribution.get('buyerAgentName') or '',
+            'buyer_brokerage_name': attribution.get('buyerBrokerageName') or '',
+            'mls_id': attribution.get('mlsId') or data.get('mlsid') or '',
+            'mls_name': attribution.get('mlsName') or '',
+            'mls_disclaimer': clean_text(attribution.get('mlsDisclaimer') or ''),
+            'attribution_contact': (attribution.get('listingAgentAttributionContact') or
+                                    attribution.get('listingAttributionContact') or ''),
+            'last_updated': attribution.get('lastUpdated') or '',
+            'last_checked': attribution.get('lastChecked') or '',
+        }
+
+    def get_monthly_cost(self, zpid, down_payment_percent: float = 20.0,
+                         term_years: int = 30,
+                         interest_rate: Optional[float] = None) -> Dict[str, Any]:
+        """
+        Return an estimated monthly ownership cost breakdown.
+
+        Principal & interest are amortized from the live Zillow mortgage rate
+        (`mortgageZHLRates`) unless the caller supplies `interest_rate`. Taxes
+        use the county rate Zillow ships on the listing, HOA is normalized to
+        monthly, and insurance/PMI are estimated — Zillow ships neither.
+        """
+        data = self._get_property_data(zpid)
+
+        price = clean_price(data.get('price'))
+        rates = data.get('mortgageZHLRates') or {}
+        bucket = ('fifteenYearFixedBucket' if int(term_years) == 15
+                  else 'thirtyYearFixedBucket')
+        if interest_rate is None:
+            interest_rate = (rates.get(bucket) or {}).get('rate')
+
+        down_payment = None
+        loan_amount = None
+        if price is not None:
+            down_payment = round(price * (down_payment_percent / 100.0), 2)
+            loan_amount = round(price - down_payment, 2)
+
+        # Standard amortization; a 0% rate degrades to a straight-line payment.
+        principal_and_interest = None
+        if loan_amount and interest_rate is not None:
+            months = int(term_years) * 12
+            monthly_rate = float(interest_rate) / 100.0 / 12.0
+            if monthly_rate > 0:
+                factor = (1 + monthly_rate) ** -months
+                principal_and_interest = round(
+                    loan_amount * monthly_rate / (1 - factor), 2
+                )
+            elif months:
+                principal_and_interest = round(loan_amount / months, 2)
+
+        # Prefer the actual assessed tax bill; fall back to the county rate.
+        reso = data.get('resoFacts') or {}
+        annual_tax = clean_price(reso.get('taxAnnualAmount'))
+        tax_rate = data.get('propertyTaxRate')
+        if annual_tax is None and price is not None and tax_rate is not None:
+            annual_tax = price * (float(tax_rate) / 100.0)
+        property_tax = round(annual_tax / 12.0, 2) if annual_tax is not None else None
+
+        insurance = (round(price * INSURANCE_RATE_ANNUAL / 12.0, 2)
+                     if price is not None else None)
+        hoa = self._hoa_monthly(data)
+
+        pmi = None
+        if loan_amount and down_payment_percent < 20:
+            pmi = round(loan_amount * PMI_RATE_ANNUAL / 12.0, 2)
+
+        components = [principal_and_interest, property_tax, insurance, hoa, pmi]
+        total = round(sum(c for c in components if c), 2) if any(components) else None
+
+        return {
+            'zpid': self._coerce_int(data.get('zpid') or zpid),
+            'price': price,
+            'down_payment': down_payment,
+            'down_payment_percent': down_payment_percent,
+            'loan_amount': loan_amount,
+            'interest_rate': interest_rate,
+            'term_years': int(term_years),
+            'rate_source': (rates.get(bucket) or {}).get('rateSource') or '',
+            'principal_and_interest': principal_and_interest,
+            'property_tax': property_tax,
+            'property_tax_rate': tax_rate,
+            'home_insurance': insurance,
+            'hoa_fee': hoa,
+            'mortgage_insurance': pmi,
+            'total_monthly': total,
+            'estimated_fields': ['home_insurance'] + (['mortgage_insurance'] if pmi else []),
+            'currency': data.get('currency', 'USD'),
+        }
+
+    def get_home_facts(self, zpid) -> Dict[str, Any]:
+        """
+        Return the full RESO facts block for a property.
+
+        Zillow ships ~187 resoFacts keys per listing, most of them null. Nulls
+        and empty containers are dropped so callers get only populated fields.
+        """
+        data = self._get_property_data(zpid)
+        reso = data.get('resoFacts') or {}
+
+        facts = {
+            key: value for key, value in reso.items()
+            if value not in (None, '', [], {})
+        }
+        # atAGlanceFacts is a label/value list — surface it as a flat mapping too.
+        at_a_glance = {
+            item.get('factLabel'): item.get('factValue')
+            for item in reso.get('atAGlanceFacts') or []
+            if isinstance(item, dict) and item.get('factLabel')
+        }
+
+        return {
+            'zpid': self._coerce_int(data.get('zpid') or zpid),
+            'fact_count': len(facts),
+            'at_a_glance': at_a_glance,
+            'facts': facts,
+        }
+
+    def get_tax_assessment(self, zpid) -> Dict[str, Any]:
+        """
+        Return current tax assessment and parcel identifiers.
+
+        Distinct from /taxHistory: this is the present-year assessment plus the
+        county/parcel identifiers used to join against public records.
+        """
+        data = self._get_property_data(zpid)
+        reso = data.get('resoFacts') or {}
+
+        assessed = clean_price(reso.get('taxAssessedValue'))
+        annual_tax = clean_price(reso.get('taxAnnualAmount'))
+        effective_rate = None
+        if assessed and annual_tax:
+            effective_rate = round(annual_tax / assessed * 100, 3)
+
+        return {
+            'zpid': self._coerce_int(data.get('zpid') or zpid),
+            'tax_assessed_value': assessed,
+            'tax_annual_amount': annual_tax,
+            'property_tax_rate': data.get('propertyTaxRate'),
+            'effective_tax_rate': effective_rate,
+            'parcel_id': data.get('parcelId') or reso.get('parcelNumber') or '',
+            'county': data.get('county', ''),
+            'county_fips': data.get('countyFIPS', ''),
+            'zoning': reso.get('zoning') or '',
+            'zoning_description': reso.get('zoningDescription') or '',
+        }
+
+    def get_nearby_areas(self, zpid) -> Dict[str, Any]:
+        """
+        Return the nearby cities, neighborhoods and zipcodes Zillow links to.
+
+        Each entry carries the Zillow region path, which can be fed straight
+        back into /bylocation or /byurl to widen a search.
+        """
+        data = self._get_property_data(zpid)
+
+        def regions(key):
+            out = []
+            for item in data.get(key) or []:
+                if not isinstance(item, dict) or not item.get('name'):
+                    continue
+                path = (item.get('regionUrl') or {}).get('path') or ''
+                out.append({
+                    'name': item['name'],
+                    'path': path,
+                    'url': f"{self.BASE_URL}{path}" if path else '',
+                })
+            return out
+
+        return {
+            'zpid': self._coerce_int(data.get('zpid') or zpid),
+            'cities': regions('nearbyCities'),
+            'neighborhoods': regions('nearbyNeighborhoods'),
+            'zipcodes': regions('nearbyZipcodes'),
+        }
+
+    def get_listing_status(self, zpid) -> Dict[str, Any]:
+        """
+        Return listing status, price-cut tracking and listing-type flags.
+
+        `listing_sub_type` carries the FSBO / foreclosure / auction / new-build
+        / coming-soon / pending booleans that searches filter on, and
+        `priceChange` is the signed delta of the most recent price move.
+        """
+        data = self._get_property_data(zpid)
+        sub_type = data.get('listing_sub_type') or data.get('listingSubType') or {}
+
+        price_change = clean_price(data.get('priceChange'))
+        # clean_price strips the sign; recover it from the raw value.
+        raw_change = data.get('priceChange')
+        if price_change is not None and isinstance(raw_change, (int, float)) and raw_change < 0:
+            price_change = -price_change
+
+        return {
+            'zpid': self._coerce_int(data.get('zpid') or zpid),
+            'status': data.get('homeStatus', ''),
+            'listing_type': data.get('listingTypeDimension', ''),
+            'price': clean_price(data.get('price')),
+            'price_change': price_change,
+            'price_change_date': data.get('priceChangeDateString') or '',
+            'date_sold': self._epoch_or_text(data.get('dateSold')),
+            'last_sold_price': clean_price(data.get('lastSoldPrice')),
+            'days_on_zillow': data.get('daysOnZillow'),
+            'time_on_zillow': data.get('timeOnZillow', ''),
+            'contingent_type': data.get('contingentListingType') or '',
+            'is_fsbo': bool(sub_type.get('is_FSBO')),
+            'is_fsba': bool(sub_type.get('is_FSBA')),
+            'is_new_home': bool(sub_type.get('is_newHome')),
+            'is_foreclosure': bool(sub_type.get('is_foreclosure')),
+            'is_bank_owned': bool(sub_type.get('is_bankOwned')),
+            'is_for_auction': bool(sub_type.get('is_forAuction')),
+            'is_coming_soon': bool(sub_type.get('is_comingSoon')),
+            'is_pending': bool(sub_type.get('is_pending')),
+            'page_view_count': data.get('pageViewCount'),
+            'favorite_count': data.get('favoriteCount'),
+        }
 
     def search_by_address(self, address: str) -> Dict[str, Any]:
         """

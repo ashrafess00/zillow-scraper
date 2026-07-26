@@ -39,6 +39,13 @@ urlpatterns = [
     path('photos', cache_page(CACHE_TTL)(views.property_photos), name='property-photos'),
     path('schools', cache_page(CACHE_TTL)(views.schools), name='schools'),
     path('similarHomes', cache_page(CACHE_TTL)(views.similar_homes), name='similar-homes'),
+    path('openHouses', cache_page(CACHE_TTL)(views.open_houses), name='open-houses'),
+    path('listingAgent', cache_page(CACHE_TTL)(views.listing_agent), name='listing-agent'),
+    path('monthlyCost', cache_page(CACHE_TTL)(views.monthly_cost), name='monthly-cost'),
+    path('homeFacts', cache_page(CACHE_TTL)(views.home_facts), name='home-facts'),
+    path('taxAssessment', cache_page(CACHE_TTL)(views.tax_assessment), name='tax-assessment'),
+    path('nearbyAreas', cache_page(CACHE_TTL)(views.nearby_areas), name='nearby-areas'),
+    path('listingStatus', cache_page(CACHE_TTL)(views.listing_status), name='listing-status'),
 
     # Other endpoints (Cached)
     path('apartmentDetails', cache_page(CACHE_TTL)(views.apartment_details), name='apartment-details'),

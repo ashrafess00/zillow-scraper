@@ -157,6 +157,134 @@ class SchoolSerializer(serializers.Serializer):
     link = serializers.CharField(required=False, allow_blank=True)
 
 
+class OpenHouseSerializer(serializers.Serializer):
+    """Serializer for a single scheduled open house."""
+
+    start_time = serializers.CharField(required=False, allow_blank=True)
+    end_time = serializers.CharField(required=False, allow_blank=True)
+    description = serializers.CharField(required=False, allow_blank=True)
+    display_text = serializers.CharField(required=False, allow_blank=True)
+
+
+class ListingAgentSerializer(serializers.Serializer):
+    """Serializer for listing-agent, co-agent, broker and MLS attribution."""
+
+    zpid = serializers.IntegerField(required=False, allow_null=True)
+    agent_name = serializers.CharField(required=False, allow_blank=True)
+    agent_phone = serializers.CharField(required=False, allow_blank=True)
+    agent_email = serializers.CharField(required=False, allow_blank=True)
+    agent_license = serializers.CharField(required=False, allow_blank=True)
+    co_agent_name = serializers.CharField(required=False, allow_blank=True)
+    co_agent_phone = serializers.CharField(required=False, allow_blank=True)
+    co_agent_license = serializers.CharField(required=False, allow_blank=True)
+    broker_name = serializers.CharField(required=False, allow_blank=True)
+    broker_phone = serializers.CharField(required=False, allow_blank=True)
+    listing_offices = serializers.ListField(
+        child=serializers.CharField(allow_blank=True), required=False
+    )
+    buyer_agent_name = serializers.CharField(required=False, allow_blank=True)
+    buyer_brokerage_name = serializers.CharField(required=False, allow_blank=True)
+    mls_id = serializers.CharField(required=False, allow_blank=True)
+    mls_name = serializers.CharField(required=False, allow_blank=True)
+    mls_disclaimer = serializers.CharField(required=False, allow_blank=True)
+    attribution_contact = serializers.CharField(required=False, allow_blank=True)
+    last_updated = serializers.CharField(required=False, allow_blank=True)
+    last_checked = serializers.CharField(required=False, allow_blank=True)
+
+
+class MonthlyCostSerializer(serializers.Serializer):
+    """Serializer for the estimated monthly ownership-cost breakdown."""
+
+    zpid = serializers.IntegerField(required=False, allow_null=True)
+    price = serializers.FloatField(required=False, allow_null=True)
+    down_payment = serializers.FloatField(required=False, allow_null=True)
+    down_payment_percent = serializers.FloatField(required=False, allow_null=True)
+    loan_amount = serializers.FloatField(required=False, allow_null=True)
+    interest_rate = serializers.FloatField(required=False, allow_null=True)
+    term_years = serializers.IntegerField(required=False, allow_null=True)
+    rate_source = serializers.CharField(required=False, allow_blank=True)
+    principal_and_interest = serializers.FloatField(required=False, allow_null=True)
+    property_tax = serializers.FloatField(required=False, allow_null=True)
+    property_tax_rate = serializers.FloatField(required=False, allow_null=True)
+    home_insurance = serializers.FloatField(required=False, allow_null=True)
+    hoa_fee = serializers.FloatField(required=False, allow_null=True)
+    mortgage_insurance = serializers.FloatField(required=False, allow_null=True)
+    total_monthly = serializers.FloatField(required=False, allow_null=True)
+    estimated_fields = serializers.ListField(
+        child=serializers.CharField(), required=False
+    )
+    currency = serializers.CharField(required=False, allow_blank=True)
+
+
+class HomeFactsSerializer(serializers.Serializer):
+    """Serializer for the full RESO facts block."""
+
+    zpid = serializers.IntegerField(required=False, allow_null=True)
+    fact_count = serializers.IntegerField(required=False, allow_null=True)
+    # Zillow's RESO block is a wide, sparse, listing-dependent bag of values —
+    # pass it through untyped rather than pinning ~187 shifting fields.
+    at_a_glance = serializers.DictField(required=False)
+    facts = serializers.DictField(required=False)
+
+
+class TaxAssessmentSerializer(serializers.Serializer):
+    """Serializer for the current tax assessment and parcel identifiers."""
+
+    zpid = serializers.IntegerField(required=False, allow_null=True)
+    tax_assessed_value = serializers.FloatField(required=False, allow_null=True)
+    tax_annual_amount = serializers.FloatField(required=False, allow_null=True)
+    property_tax_rate = serializers.FloatField(required=False, allow_null=True)
+    effective_tax_rate = serializers.FloatField(required=False, allow_null=True)
+    parcel_id = serializers.CharField(required=False, allow_blank=True)
+    county = serializers.CharField(required=False, allow_blank=True)
+    county_fips = serializers.CharField(required=False, allow_blank=True)
+    zoning = serializers.CharField(required=False, allow_blank=True)
+    zoning_description = serializers.CharField(required=False, allow_blank=True)
+
+
+class NearbyRegionSerializer(serializers.Serializer):
+    """Serializer for a single nearby city / neighborhood / zipcode link."""
+
+    name = serializers.CharField(required=False, allow_blank=True)
+    path = serializers.CharField(required=False, allow_blank=True)
+    url = serializers.CharField(required=False, allow_blank=True)
+
+
+class NearbyAreasSerializer(serializers.Serializer):
+    """Serializer for the nearby regions Zillow links from a listing."""
+
+    zpid = serializers.IntegerField(required=False, allow_null=True)
+    cities = NearbyRegionSerializer(many=True, required=False)
+    neighborhoods = NearbyRegionSerializer(many=True, required=False)
+    zipcodes = NearbyRegionSerializer(many=True, required=False)
+
+
+class ListingStatusSerializer(serializers.Serializer):
+    """Serializer for listing status, price-cut tracking and listing-type flags."""
+
+    zpid = serializers.IntegerField(required=False, allow_null=True)
+    status = serializers.CharField(required=False, allow_blank=True)
+    listing_type = serializers.CharField(required=False, allow_blank=True)
+    price = serializers.FloatField(required=False, allow_null=True)
+    price_change = serializers.FloatField(required=False, allow_null=True)
+    price_change_date = serializers.CharField(required=False, allow_blank=True)
+    date_sold = serializers.CharField(required=False, allow_blank=True)
+    last_sold_price = serializers.FloatField(required=False, allow_null=True)
+    days_on_zillow = serializers.IntegerField(required=False, allow_null=True)
+    time_on_zillow = serializers.CharField(required=False, allow_blank=True)
+    contingent_type = serializers.CharField(required=False, allow_blank=True)
+    is_fsbo = serializers.BooleanField(required=False)
+    is_fsba = serializers.BooleanField(required=False)
+    is_new_home = serializers.BooleanField(required=False)
+    is_foreclosure = serializers.BooleanField(required=False)
+    is_bank_owned = serializers.BooleanField(required=False)
+    is_for_auction = serializers.BooleanField(required=False)
+    is_coming_soon = serializers.BooleanField(required=False)
+    is_pending = serializers.BooleanField(required=False)
+    page_view_count = serializers.IntegerField(required=False, allow_null=True)
+    favorite_count = serializers.IntegerField(required=False, allow_null=True)
+
+
 class ErrorSerializer(serializers.Serializer):
     """Serializer for error responses."""
 

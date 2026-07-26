@@ -410,6 +410,282 @@ class PropertyDetailEndpointTests(APITestCase):
         self.assertEqual(response.data[0]['zpid'], 22222222)
 
 
+@override_settings(CACHES=LOCMEM_CACHE)
+class ExtendedDetailScraperTests(TestCase):
+    """Tests for the detail parsers added on top of the shared property cache.
+
+    Key names and shapes here were taken from live Zillow homedetails responses
+    (see the fixture), not guessed.
+    """
+
+    def setUp(self):
+        from django.core.cache import cache
+        cache.clear()
+        self.fixture = _load_property_fixture()
+
+    def _scraper(self):
+        from scrapers.property_scraper import property_scraper
+        return property_scraper
+
+    def _with_fixture(self, method, *args, **kwargs):
+        scraper = self._scraper()
+        with patch.object(scraper, '_get_property_data', return_value=self.fixture):
+            return getattr(scraper, method)(12345678, *args, **kwargs)
+
+    def test_all_detail_parsers_share_one_fetch(self):
+        """Every new endpoint reads the cached object; none adds a second fetch."""
+        scraper = self._scraper()
+        soup = _homedetails_soup(self.fixture)
+        with patch.object(scraper, 'get_soup', return_value=soup) as mock_soup:
+            scraper.get_open_houses(12345678)
+            scraper.get_listing_agent(12345678)
+            scraper.get_monthly_cost(12345678)
+            scraper.get_home_facts(12345678)
+            scraper.get_tax_assessment(12345678)
+            scraper.get_nearby_areas(12345678)
+            scraper.get_listing_status(12345678)
+        self.assertEqual(mock_soup.call_count, 1)
+
+    def test_get_open_houses(self):
+        from api.serializers import OpenHouseSerializer
+        events = self._with_fixture('get_open_houses')
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]['display_text'], 'Sun. 12-2pm')
+        self.assertEqual(events[0]['description'], 'Refreshments provided')
+        # Epoch-ms timestamps are rendered as ISO-8601 Z strings.
+        self.assertTrue(events[0]['start_time'].endswith('Z'))
+        self.assertTrue(events[0]['start_time'].startswith('2024-03-06'))
+        self.assertEqual(OpenHouseSerializer(events, many=True).data[0]['end_time'],
+                         events[0]['end_time'])
+
+    def test_get_open_houses_empty_is_not_an_error(self):
+        """Most listings carry an empty schedule; that must yield []."""
+        scraper = self._scraper()
+        data = dict(self.fixture, openHouseSchedule=[])
+        with patch.object(scraper, '_get_property_data', return_value=data):
+            self.assertEqual(scraper.get_open_houses(12345678), [])
+
+    def test_get_listing_agent(self):
+        from api.serializers import ListingAgentSerializer
+        agent = self._with_fixture('get_listing_agent')
+        self.assertEqual(agent['agent_name'], 'Enrique Cordova')
+        self.assertEqual(agent['agent_phone'], '(512) 744-5275')
+        self.assertEqual(agent['broker_name'], 'Acme Realty')
+        self.assertEqual(agent['broker_phone'], '(877) 366-2213')
+        self.assertEqual(agent['listing_offices'], ['Acme Realty'])
+        self.assertEqual(agent['mls_id'], 'ABC123')
+        # attributionInfo has no co-agent, so listedBy supplies it.
+        self.assertEqual(agent['co_agent_name'], 'Lesley Estes')
+        self.assertEqual(ListingAgentSerializer(agent).data['agent_name'],
+                         'Enrique Cordova')
+
+    def test_get_listing_agent_falls_back_to_listed_by(self):
+        """A listing with no attributionInfo still resolves names from listedBy."""
+        scraper = self._scraper()
+        data = dict(self.fixture, attributionInfo={})
+        with patch.object(scraper, '_get_property_data', return_value=data):
+            agent = scraper.get_listing_agent(12345678)
+        self.assertEqual(agent['agent_name'], 'Enrique Cordova')
+        self.assertEqual(agent['broker_name'], 'Acme Realty')
+
+    def test_hoa_normalized_to_monthly(self):
+        """A semi-annual resoFacts fee must not be reported as a monthly one."""
+        scraper = self._scraper()
+        data = dict(self.fixture)
+        data.pop('monthlyHoaFee')  # force the resoFacts string path
+        with patch.object(scraper, '_get_property_data', return_value=data):
+            cost = scraper.get_monthly_cost(12345678)
+        self.assertEqual(cost['hoa_fee'], 50.0)  # "$300 semi-annually" / 6
+
+    def test_get_monthly_cost_amortization(self):
+        from api.serializers import MonthlyCostSerializer
+        cost = self._with_fixture('get_monthly_cost')
+        self.assertEqual(cost['down_payment'], 150000.0)
+        self.assertEqual(cost['loan_amount'], 600000.0)
+        self.assertEqual(cost['interest_rate'], 7.07)  # live 30-yr rate
+        self.assertEqual(cost['rate_source'], 'ZGMI')
+        # 600000 @ 7.07% over 360 months.
+        self.assertAlmostEqual(cost['principal_and_interest'], 4020.06, places=2)
+        self.assertEqual(cost['property_tax'], 912.5)   # taxAnnualAmount / 12
+        self.assertEqual(cost['home_insurance'], 218.75)  # 0.35% of price / 12
+        self.assertEqual(cost['hoa_fee'], 50.0)
+        self.assertIsNone(cost['mortgage_insurance'])  # 20% down
+        self.assertAlmostEqual(
+            cost['total_monthly'],
+            cost['principal_and_interest'] + 912.5 + 218.75 + 50.0, places=1
+        )
+        self.assertEqual(MonthlyCostSerializer(cost).data['total_monthly'],
+                         cost['total_monthly'])
+
+    def test_get_monthly_cost_adds_pmi_under_20_percent_down(self):
+        cost = self._with_fixture('get_monthly_cost', down_payment_percent=10.0)
+        self.assertEqual(cost['loan_amount'], 675000.0)
+        self.assertEqual(cost['mortgage_insurance'], 281.25)  # 0.5%/yr of loan
+        self.assertIn('mortgage_insurance', cost['estimated_fields'])
+
+    def test_get_monthly_cost_honours_overrides(self):
+        cost = self._with_fixture('get_monthly_cost', term_years=15,
+                                  interest_rate=5.0)
+        self.assertEqual(cost['term_years'], 15)
+        self.assertEqual(cost['interest_rate'], 5.0)
+        self.assertAlmostEqual(cost['principal_and_interest'], 4744.76, places=2)
+
+    def test_get_home_facts_drops_nulls(self):
+        from api.serializers import HomeFactsSerializer
+        facts = self._with_fixture('get_home_facts')
+        self.assertIn('appliances', facts['facts'])
+        # null / "" / [] entries are stripped so callers only see populated keys.
+        for empty_key in ('flooring', 'attic', 'buildingFeatures'):
+            self.assertNotIn(empty_key, facts['facts'])
+        self.assertEqual(facts['fact_count'], len(facts['facts']))
+        self.assertEqual(facts['at_a_glance']['Year Built'], '2015')
+        self.assertEqual(HomeFactsSerializer(facts).data['fact_count'],
+                         facts['fact_count'])
+
+    def test_get_tax_assessment(self):
+        from api.serializers import TaxAssessmentSerializer
+        tax = self._with_fixture('get_tax_assessment')
+        self.assertEqual(tax['tax_assessed_value'], 730000)
+        self.assertEqual(tax['tax_annual_amount'], 10950)
+        self.assertEqual(tax['property_tax_rate'], 1.46)
+        self.assertEqual(tax['effective_tax_rate'], 1.5)  # 10950 / 730000
+        self.assertEqual(tax['parcel_id'], '862650')
+        self.assertEqual(tax['county_fips'], '48453')
+        self.assertEqual(tax['zoning'], 'SF-3')
+        self.assertEqual(TaxAssessmentSerializer(tax).data['county'], 'Travis County')
+
+    def test_get_nearby_areas(self):
+        from api.serializers import NearbyAreasSerializer
+        areas = self._with_fixture('get_nearby_areas')
+        self.assertEqual(len(areas['cities']), 2)
+        self.assertEqual(areas['cities'][0]['name'], 'Austin')
+        self.assertEqual(areas['cities'][0]['path'], '/austin-tx/')
+        self.assertEqual(areas['cities'][0]['url'],
+                         'https://www.zillow.com/austin-tx/')
+        self.assertEqual(areas['zipcodes'][0]['name'], '78704')
+        self.assertEqual(NearbyAreasSerializer(areas).data['neighborhoods'][0]['name'],
+                         'Downtown')
+
+    def test_get_listing_status(self):
+        from api.serializers import ListingStatusSerializer
+        s = self._with_fixture('get_listing_status')
+        self.assertEqual(s['status'], 'FOR_SALE')
+        self.assertEqual(s['listing_type'], 'For Sale by Agent')
+        # A price cut must stay negative; clean_price strips the sign.
+        self.assertEqual(s['price_change'], -15000)
+        self.assertEqual(s['price_change_date'], '2024-03-01')
+        self.assertTrue(s['is_fsba'])
+        self.assertFalse(s['is_foreclosure'])
+        self.assertFalse(s['is_pending'])
+        self.assertEqual(s['time_on_zillow'], '12 days')
+        self.assertEqual(ListingStatusSerializer(s).data['price_change'], -15000)
+
+
+@override_settings(CACHES=LOCMEM_CACHE)
+class ExtendedDetailEndpointTests(APITestCase):
+    """Routing and validation for the endpoints added on the shared cache."""
+
+    def setUp(self):
+        from django.core.cache import cache
+        cache.clear()
+
+    def test_all_new_endpoints_require_zpid(self):
+        for path in ('/openHouses', '/listingAgent', '/monthlyCost', '/homeFacts',
+                     '/taxAssessment', '/nearbyAreas', '/listingStatus'):
+            with self.subTest(path=path):
+                response = self.client.get(path)
+                self.assertEqual(response.status_code, status.HTTP_200_OK)
+                self.assertEqual(response.data['status_code'], 400)
+
+    @patch('api.views.property_scraper')
+    def test_open_houses_endpoint(self, mock_scraper):
+        mock_scraper.get_open_houses.return_value = [
+            {'start_time': '2024-03-06T18:00:00Z', 'display_text': 'Sun. 12-2pm'},
+        ]
+        response = self.client.get('/openHouses', {'zpid': '12345678'})
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data[0]['display_text'], 'Sun. 12-2pm')
+
+    @patch('api.views.property_scraper')
+    def test_listing_agent_endpoint(self, mock_scraper):
+        mock_scraper.get_listing_agent.return_value = {
+            'zpid': 12345678, 'agent_name': 'Enrique Cordova', 'mls_id': 'ABC123',
+        }
+        response = self.client.get('/listingAgent', {'zpid': '12345678'})
+        self.assertEqual(response.data['agent_name'], 'Enrique Cordova')
+        mock_scraper.get_listing_agent.assert_called_once_with(12345678)
+
+    @patch('api.views.property_scraper')
+    def test_monthly_cost_passes_params(self, mock_scraper):
+        mock_scraper.get_monthly_cost.return_value = {'zpid': 12345678}
+        response = self.client.get('/monthlyCost', {
+            'zpid': '12345678', 'downPayment': '10', 'termYears': '15',
+            'interestRate': '5.5',
+        })
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        mock_scraper.get_monthly_cost.assert_called_once_with(
+            12345678, down_payment_percent=10.0, term_years=15, interest_rate=5.5
+        )
+
+    @patch('api.views.property_scraper')
+    def test_monthly_cost_defaults(self, mock_scraper):
+        mock_scraper.get_monthly_cost.return_value = {'zpid': 12345678}
+        self.client.get('/monthlyCost', {'zpid': '12345678'})
+        mock_scraper.get_monthly_cost.assert_called_once_with(
+            12345678, down_payment_percent=20.0, term_years=30, interest_rate=None
+        )
+
+    def test_monthly_cost_rejects_bad_down_payment(self):
+        response = self.client.get('/monthlyCost',
+                                   {'zpid': '12345678', 'downPayment': '150'})
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['status_code'], 400)
+
+    def test_monthly_cost_rejects_bad_term(self):
+        response = self.client.get('/monthlyCost',
+                                   {'zpid': '12345678', 'termYears': '7'})
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['status_code'], 400)
+
+    @patch('api.views.property_scraper')
+    def test_home_facts_endpoint(self, mock_scraper):
+        mock_scraper.get_home_facts.return_value = {
+            'zpid': 12345678, 'fact_count': 2, 'at_a_glance': {'Type': 'SFR'},
+            'facts': {'appliances': ['Dishwasher'], 'cooling': ['Central Air']},
+        }
+        response = self.client.get('/homeFacts', {'zpid': '12345678'})
+        self.assertEqual(response.data['fact_count'], 2)
+        self.assertEqual(response.data['facts']['appliances'], ['Dishwasher'])
+
+    @patch('api.views.property_scraper')
+    def test_tax_assessment_endpoint(self, mock_scraper):
+        mock_scraper.get_tax_assessment.return_value = {
+            'zpid': 12345678, 'tax_assessed_value': 730000.0, 'parcel_id': '862650',
+        }
+        response = self.client.get('/taxAssessment', {'zpid': '12345678'})
+        self.assertEqual(response.data['tax_assessed_value'], 730000.0)
+
+    @patch('api.views.property_scraper')
+    def test_nearby_areas_endpoint(self, mock_scraper):
+        mock_scraper.get_nearby_areas.return_value = {
+            'zpid': 12345678,
+            'cities': [{'name': 'Austin', 'path': '/austin-tx/', 'url': 'u'}],
+            'neighborhoods': [], 'zipcodes': [],
+        }
+        response = self.client.get('/nearbyAreas', {'zpid': '12345678'})
+        self.assertEqual(response.data['cities'][0]['name'], 'Austin')
+
+    @patch('api.views.property_scraper')
+    def test_listing_status_endpoint(self, mock_scraper):
+        mock_scraper.get_listing_status.return_value = {
+            'zpid': 12345678, 'status': 'FOR_SALE', 'price_change': -15000.0,
+            'is_foreclosure': False,
+        }
+        response = self.client.get('/listingStatus', {'zpid': '12345678'})
+        self.assertEqual(response.data['price_change'], -15000.0)
+        self.assertFalse(response.data['is_foreclosure'])
+
+
 class SearchStatusSortTests(TestCase):
     """Tests for listing-type toggles and sort in the search query state."""
 
@@ -478,8 +754,17 @@ class SearchStatusSortTests(TestCase):
         self.assertEqual(state['filterState']['sortSelection'], {'value': 'days'})
 
 
+@override_settings(CACHES=LOCMEM_CACHE)
 class ByAddressTests(APITestCase):
     """Tests for the /byAddress endpoint."""
+
+    def setUp(self):
+        # /byAddress is wrapped in cache_page, which writes to the default
+        # (Redis) cache. Without an in-process cache that is cleared per test,
+        # a response cached by an earlier run is replayed and the scraper mock
+        # is never called. Same reason as PropertyDetailEndpointTests.
+        from django.core.cache import cache
+        cache.clear()
 
     def test_requires_address(self):
         response = self.client.get('/byAddress')
