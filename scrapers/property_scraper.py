@@ -4,6 +4,7 @@ Property scraper for Zillow property listings.
 
 import re
 import json
+import math
 import logging
 from typing import Optional, Dict, List, Any
 from urllib.parse import urlencode, quote
@@ -51,6 +52,59 @@ INSURANCE_RATE_ANNUAL = 0.0035
 # Annual PMI as a share of the loan, applied only when down payment < 20%.
 PMI_RATE_ANNUAL = 0.005
 
+# --- /similarHomes -----------------------------------------------------------
+# Zillow no longer ships a `nearbyHomes` array on the homedetails property object
+# (verified live 2026-07-30), and the comps behind the on-page carousel come from
+# `zg-graph`, which answers any query not on its persisted-query safelist with
+# QUERY_NOT_IN_SAFELIST. So comps are rebuilt from the search index instead: look
+# around the subject, then rank. See get_similar_homes.
+EARTH_RADIUS_MILES = 3958.7613
+
+# Half-height of the search box, in degrees of latitude. The tight box is tried
+# first; if it yields fewer comps than asked for, the wide box is tried once.
+SIMILAR_TIGHT_DELTA_DEG = 0.015   # ~1.0 mi
+SIMILAR_WIDE_DELTA_DEG = 0.05     # ~3.5 mi
+
+SIMILAR_HOMES_CACHE_TIMEOUT = 60 * 15
+
+# Ranking weights — lower total score is a closer comp. Proximity and size
+# dominate; price is weighted lightly on purpose so that an over- or under-priced
+# neighbour still surfaces (that spread is the point of pulling comps at all).
+SIMILARITY_WEIGHTS = {
+    'distance': 1.0,    # per mile
+    'sqft': 2.0,        # per 1.0 of fractional size difference
+    'beds': 0.35,       # per bedroom
+    'baths': 0.25,      # per bathroom
+    'price': 0.5,       # per 1.0 of fractional price difference
+    'home_type': 0.75,  # flat penalty when the property type differs
+}
+
+# --- /marketStats ------------------------------------------------------------
+# Region market data comes from Zillow's home-values page, which carries an
+# `odpMarketAnalytics` block inside __NEXT_DATA__. It is a plain page fetch — no
+# GraphQL, so it is not subject to the zg-graph persisted-query safelist.
+MARKET_STATS_CACHE_TIMEOUT = 60 * 60 * 6  # region aggregates move monthly, not hourly
+
+# Zillow publishes these monthly, so the "latest" figures for listings and sales
+# sit on different period ends. Both are reported rather than reconciled.
+MARKET_HISTORY_LIMIT = 120
+
+# Zillow's `parentage` array is misnamed: for Austin it holds the five real
+# ancestors (country, state, DMA, CBSA, county) *and* all 73 zipcodes contained
+# by the city. Ranking the geography lets the descendants be dropped — an entry
+# is an ancestor only if it sits strictly above the region's own level. Unranked
+# types are kept rather than guessed at.
+REGION_HIERARCHY = {
+    'country': 0,
+    'state': 1,
+    'dma': 2,
+    'cbsa': 3, 'msa': 3, 'metro': 3,
+    'county': 4,
+    'city': 5, 'borough': 5,
+    'zipcode': 6, 'zip': 6,
+    'neighborhood': 7,
+}
+
 # Friendly sort names → Zillow searchQueryState.sortSelection tokens.
 # Unknown values are passed through unchanged (Zillow ignores tokens it doesn't
 # recognize, so this fails soft). Tokens beyond "days"/"globalrelevanceex" are
@@ -78,7 +132,11 @@ def resolve_sort(sort) -> Optional[str]:
 
 class PropertyScraper(BaseScraper):
     """Scraper for Zillow property listings."""
-    
+
+    # Zillow's public suggestions service. It lives on the zillowstatic CDN host,
+    # not www.zillow.com — the same path under www 404s.
+    AUTOCOMPLETE_URL = "https://www.zillowstatic.com/autocomplete/v3/suggestions"
+
     @staticmethod
     def _apply_list_type(filter_state: Dict, list_type: str) -> None:
         """
@@ -1118,31 +1176,183 @@ class PropertyScraper(BaseScraper):
             })
         return schools
 
-    def get_similar_homes(self, zpid) -> List[Dict[str, Any]]:
-        """Return comparable / nearby homes as property cards."""
+    @staticmethod
+    def _haversine_miles(lat1, lng1, lat2, lng2) -> Optional[float]:
+        """Great-circle distance in miles, or None if either point is incomplete."""
+        try:
+            lat1, lng1, lat2, lng2 = float(lat1), float(lng1), float(lat2), float(lng2)
+        except (TypeError, ValueError):
+            return None
+        r_lat1, r_lat2 = math.radians(lat1), math.radians(lat2)
+        d_lat = r_lat2 - r_lat1
+        d_lng = math.radians(lng2 - lng1)
+        a = (math.sin(d_lat / 2) ** 2 +
+             math.cos(r_lat1) * math.cos(r_lat2) * math.sin(d_lng / 2) ** 2)
+        return round(EARTH_RADIUS_MILES * 2 * math.asin(math.sqrt(a)), 3)
+
+    @staticmethod
+    def _list_type_for_status(status) -> str:
+        """Pick the comp market that matches the subject's own listing status."""
+        status = str(status or '').upper()
+        if 'RENT' in status:
+            return 'for-rent'
+        if 'SOLD' in status:
+            return 'sold'
+        return 'for-sale'
+
+    @staticmethod
+    def _similarity_score(subject: Dict, card: Dict, distance_miles) -> float:
+        """
+        Score a candidate against the subject — lower is a closer comp.
+
+        Every term is skipped when either side is missing rather than scored as
+        zero, so a card with no sqft isn't rewarded for it.
+        """
+        w = SIMILARITY_WEIGHTS
+        score = 0.0
+
+        if distance_miles is not None:
+            score += w['distance'] * distance_miles
+
+        subject_sqft, card_sqft = subject.get('sqft'), card.get('sqft')
+        if subject_sqft and card_sqft:
+            score += w['sqft'] * abs(card_sqft - subject_sqft) / subject_sqft
+
+        # Sold cards carry no sale price, so fall back to the zestimate — without
+        # it every sold comp would score identically on the price term.
+        subject_price = subject.get('price') or subject.get('zestimate')
+        card_price = card.get('price') or card.get('zestimate')
+        if subject_price and card_price:
+            score += w['price'] * abs(card_price - subject_price) / subject_price
+
+        for key, weight in (('beds', w['beds']), ('baths', w['baths'])):
+            subject_value, card_value = subject.get(key), card.get(key)
+            if subject_value is not None and card_value is not None:
+                try:
+                    score += weight * abs(float(card_value) - float(subject_value))
+                except (TypeError, ValueError):
+                    pass
+
+        subject_type = subject.get('home_type') or ''
+        card_type = str(card.get('property_type') or '').upper()
+        if subject_type and card_type and subject_type != card_type:
+            score += w['home_type']
+
+        return round(score, 4)
+
+    def _search_around(self, lat, lng, delta: float, list_type: str) -> List[Dict]:
+        """
+        Run one map-bounds search centred on a point, returning [] on failure.
+
+        A degree of longitude narrows as latitude rises, so the east-west delta is
+        scaled by 1/cos(lat) to keep the box roughly square on the ground rather
+        than a thin sliver in the north.
+        """
+        lat, lng = float(lat), float(lng)
+        lng_delta = delta / max(math.cos(math.radians(lat)), 0.1)
+        try:
+            parsed = self.search_by_map_bounds(
+                north=lat + delta,
+                south=lat - delta,
+                east=lng + lng_delta,
+                west=lng - lng_delta,
+                list_type=list_type,
+            )
+        except (NotFoundException, ScraperException) as e:
+            logger.info(f"Comp search found nothing within {delta} deg: {e}")
+            return []
+        return parsed.get('results') or []
+
+    def get_similar_homes(
+        self, zpid, count: int = 8, list_type: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Return comparable homes near a property, closest comp first.
+
+        Zillow used to ship these on the homedetails `property` object as
+        `nearbyHomes`; it no longer does, and its own comps API is behind a
+        persisted-query safelist we can't call. So the list is rebuilt from the
+        search index: search a tight box around the subject (widening once if
+        that box is too sparse), drop the subject itself, then rank each
+        candidate by distance, size, beds, baths, price and property type.
+
+        `list_type` defaults to the subject's own market — comps for a sold home
+        are other sold homes, comps for a rental are other rentals.
+
+        Costs one search fetch on top of the (cached) subject fetch, so the
+        result is cached separately under `similar:{zpid}:{list_type}:{count}`.
+        """
         data = self._get_property_data(zpid)
-        homes = data.get('nearbyHomes') or data.get('comps') or []
+
+        lat, lng = data.get('latitude'), data.get('longitude')
+        if lat is None or lng is None:
+            logger.warning(f"zpid {zpid} has no coordinates; cannot build comps")
+            return []
+
+        subject_zpid = self._coerce_int(data.get('zpid') or zpid)
+        if list_type is None:
+            list_type = self._list_type_for_status(data.get('homeStatus'))
+
+        cache_key = f"similar:{subject_zpid}:{list_type}:{count}"
+        cached = cache.get(cache_key)
+        if cached is not None:
+            logger.info(f"Similar-homes cache HIT for zpid {subject_zpid}")
+            return cached
+
+        subject = {
+            'sqft': self._coerce_int(
+                data.get('livingArea') or data.get('livingAreaValue')
+            ),
+            'beds': data.get('bedrooms'),
+            'baths': data.get('bathrooms'),
+            'price': clean_price(data.get('price')),
+            'zestimate': clean_price(data.get('zestimate')),
+            'home_type': str(data.get('homeType') or '').upper(),
+        }
+
+        # Tight box first; only pay for the wider search if it came back thin.
+        candidates: Dict[int, Dict] = {}
+        for delta in (SIMILAR_TIGHT_DELTA_DEG, SIMILAR_WIDE_DELTA_DEG):
+            for card in self._search_around(lat, lng, delta, list_type):
+                card_zpid = card.get('zpid')
+                if card_zpid and card_zpid != subject_zpid:
+                    candidates.setdefault(card_zpid, card)
+            if len(candidates) >= count:
+                break
+
         results = []
-        for home in homes:
-            if not isinstance(home, dict) or not home.get('zpid'):
-                continue
-            photos = self._photo_urls_from(
-                home.get('miniCardPhotos') or home.get('photos')
+        for card in candidates.values():
+            distance = self._haversine_miles(
+                lat, lng, card.get('latitude'), card.get('longitude')
             )
             results.append({
-                'zpid': self._coerce_int(home.get('zpid')),
-                'address': self._build_address(home),
-                'url': f"{self.BASE_URL}/homedetails/{home.get('zpid')}_zpid/",
-                'photo_url': photos[0] if photos else '',
-                'price': clean_price(home.get('price')),
-                'beds': home.get('bedrooms') or home.get('beds'),
-                'baths': home.get('bathrooms') or home.get('baths'),
-                'sqft': self._coerce_int(home.get('livingArea')),
-                'property_type': home.get('homeType', ''),
-                'status': home.get('homeStatus', ''),
-                'latitude': home.get('latitude'),
-                'longitude': home.get('longitude'),
+                'zpid': card.get('zpid'),
+                'address': card.get('address', ''),
+                'url': card.get('url', ''),
+                'photo_url': card.get('photo_url', ''),
+                'price': card.get('price'),
+                'beds': card.get('beds'),
+                'baths': card.get('baths'),
+                'sqft': card.get('sqft'),
+                'property_type': card.get('property_type', ''),
+                'status': card.get('status', ''),
+                'latitude': card.get('latitude'),
+                'longitude': card.get('longitude'),
+                'brokerage': card.get('brokerage', ''),
+                'zestimate': card.get('zestimate'),
+                'date_sold': card.get('date_sold', ''),
+                'distance_miles': distance,
+                'similarity_score': self._similarity_score(subject, card, distance),
             })
+
+        results.sort(key=lambda r: r['similarity_score'])
+        results = results[:count]
+
+        cache.set(cache_key, results, SIMILAR_HOMES_CACHE_TIMEOUT)
+        logger.info(
+            f"Built {len(results)} comps for zpid {subject_zpid} "
+            f"({list_type}) from {len(candidates)} candidates"
+        )
         return results
 
     # ------------------------------------------------------------------
@@ -1603,107 +1813,312 @@ class PropertyScraper(BaseScraper):
             logger.error(f"Failed to get apartment details: {e}")
             raise ScraperException(f"Failed to get apartment details: {e}")
     
+    # ------------------------------------------------------------------
+    # Region market stats
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _round(value, digits=2) -> Optional[float]:
+        """Round a numeric value, passing None through."""
+        try:
+            return round(float(value), digits)
+        except (TypeError, ValueError):
+            return None
+
+    @classmethod
+    def _as_pct(cls, ratio, digits=2) -> Optional[float]:
+        """Convert Zillow's 0-1 ratios to a percentage (0.0502 -> 5.02)."""
+        value = cls._round(ratio, 10)
+        return None if value is None else round(value * 100, digits)
+
+    @classmethod
+    def _series(cls, entries, value_key, digits=2) -> List[Dict[str, Any]]:
+        """Flatten a Zillow {timePeriodEnd, <value_key>} range into date/value pairs."""
+        series = []
+        for entry in (entries or [])[:MARKET_HISTORY_LIMIT]:
+            if not isinstance(entry, dict):
+                continue
+            value = cls._round(entry.get(value_key), digits)
+            if value is None:
+                continue
+            series.append({'date': entry.get('timePeriodEnd', ''), 'value': value})
+        return series
+
+    @staticmethod
+    def _region_ancestors(region: Dict) -> List[Dict[str, str]]:
+        """
+        Return only the regions that actually *contain* this one, widest first.
+
+        Zillow's `parentage` array also lists the region's children (every
+        zipcode inside a city), so returning it verbatim buries three useful
+        ancestors under 73 descendants.
+        """
+        own_rank = REGION_HIERARCHY.get(
+            str(region.get('regionTypeName') or '').lower()
+        )
+        ancestors = []
+        for entry in region.get('parentage') or []:
+            if not isinstance(entry, dict) or not entry.get('name'):
+                continue
+            entry_type = str(entry.get('regionType') or '').lower()
+            entry_rank = REGION_HIERARCHY.get(entry_type)
+            # Keep anything we can't rank — better an extra entry than a lost one.
+            if own_rank is not None and entry_rank is not None and entry_rank >= own_rank:
+                continue
+            ancestors.append({'name': entry['name'], 'type': entry_type})
+        return ancestors
+
+    def _resolved_slug_candidates(self, location: str) -> List[str]:
+        """
+        Slug forms derived from /autocomplete, for when the literal slug misses.
+
+        The home-values path is unforgiving about region slugs: `/austin-tx/`
+        works but a bare zipcode does not — `/90210/home-values/` 404s while
+        `/los-angeles-ca-90210/` resolves. Autocomplete knows the region's city,
+        state and zip, which is enough to build the form Zillow wants.
+
+        Only called after the literal slug fails, so the common case costs no
+        extra request.
+        """
+        try:
+            suggestions = self.autocomplete(location)
+        except (ScraperException, NotFoundException) as e:
+            logger.info(f"Autocomplete lookup for region {location!r} failed: {e}")
+            return []
+
+        for hit in suggestions:
+            if hit.get('type') != 'region':
+                continue
+            city = slugify_location(hit.get('city') or '').lower()
+            state = (hit.get('state') or '').lower()
+            zipcode = hit.get('zipcode') or ''
+
+            if (hit.get('region_type') or '') == 'zipcode' and zipcode:
+                return [s for s in (
+                    f"{city}-{state}-{zipcode}" if city and state else '',
+                    f"{state}-{zipcode}" if state else '',
+                ) if s]
+            if city and state:
+                return [f"{city}-{state}"]
+            break  # only the top match is worth trying
+        return []
+
+    def _load_market_page(self, slug: str) -> Optional[Dict[str, Any]]:
+        """Fetch one home-values page, returning its pageProps or None on a miss."""
+        try:
+            soup = self.get_soup(f"{self.BASE_URL}/{slug}/home-values/")
+        except NotFoundException:
+            logger.info(f"Market page miss for slug {slug!r}")
+            return None
+
+        node = soup.find('script', {'id': '__NEXT_DATA__'})
+        if not node or not node.string:
+            logger.info(f"Market page for {slug!r} carried no __NEXT_DATA__")
+            return None
+        try:
+            data = json.loads(node.string)
+        except json.JSONDecodeError:
+            logger.warning(f"Market page for {slug!r} had unparseable __NEXT_DATA__")
+            return None
+
+        page_props = (data.get('props') or {}).get('pageProps') or {}
+        if not page_props.get('odpMarketAnalytics'):
+            logger.info(f"Market page for {slug!r} had no odpMarketAnalytics block")
+            return None
+        return page_props
+
+    def _fetch_market_page(self, location: str):
+        """
+        Return (pageProps, slug) for the first slug form that resolves.
+
+        Tries the caller's own slug first and only falls back to an autocomplete
+        lookup if that misses, so a well-formed slug costs exactly one request.
+        """
+        literal = slugify_location(location).strip('/').lower()
+
+        tried = set()
+        if literal:
+            tried.add(literal)
+            page_props = self._load_market_page(literal)
+            if page_props is not None:
+                return page_props, literal
+
+        for slug in self._resolved_slug_candidates(location):
+            if slug in tried:
+                continue
+            tried.add(slug)
+            page_props = self._load_market_page(slug)
+            if page_props is not None:
+                return page_props, slug
+
+        raise NotFoundException(f"No market data found for location: {location}")
+
+    def get_market_stats(self, location: str, history: bool = False) -> Dict[str, Any]:
+        """
+        Return market statistics for a region (city, zip, neighborhood, county,
+        state).
+
+        Sourced from the `odpMarketAnalytics` block on Zillow's home-values page
+        for the region. Zillow publishes these monthly and staggers them, so the
+        listing figures and the sale figures carry their own `as_of` dates rather
+        than being forced onto a single one.
+
+        Cached for six hours — these are monthly aggregates, so the 15-minute TTL
+        used for listings would just buy repeated fetches of identical numbers.
+        """
+        cache_key = f"market:{slugify_location(location).lower()}:{int(bool(history))}"
+        cached = cache.get(cache_key)
+        if cached is not None:
+            logger.info(f"Market stats cache HIT for {location!r}")
+            return cached
+
+        page_props, slug = self._fetch_market_page(location)
+        market = page_props.get('odpMarketAnalytics') or {}
+
+        # Both blocks describe the same region, but only `zhviRegion` carries
+        # `parentage` — reading just `requestedRegion` silently loses it.
+        region = dict(page_props.get('zhviRegion') or {})
+        region.update({
+            k: v for k, v in (page_props.get('requestedRegion') or {}).items()
+            if v not in (None, '', [])
+        })
+
+        zhvi = market.get('zhviLatest') or {}
+        listing = market.get('mrktListingLatest') or {}
+        sale = market.get('mrktSaleLatest') or {}
+
+        # medianDaysToPending and the sale-to-list figures are only ever on the
+        # *Range arrays, never on the *Latest objects — read the newest entry.
+        listing_range = market.get('mrktListingRange') or []
+        sale_range = market.get('mrktSaleRange') or []
+        rental_range = market.get('rentalMrktRange') or []
+        latest_listing_period = listing_range[0] if listing_range else {}
+        latest_sale_period = sale_range[0] if sale_range else {}
+        latest_rental = rental_range[0] if rental_range else {}
+
+        result = {
+            'region': {
+                'id': self._coerce_int(region.get('rid')),
+                'name': region.get('name', ''),
+                'type': region.get('regionTypeName', ''),
+                'url': (
+                    f"{self.BASE_URL}{(region.get('regionUrl') or {}).get('path', '')}"
+                    if (region.get('regionUrl') or {}).get('path') else ''
+                ),
+                'slug': slug,
+                'parentage': self._region_ancestors(region),
+            },
+            'listings_as_of': listing.get('timePeriodEnd', ''),
+            'sales_as_of': sale.get('timePeriodEnd', ''),
+
+            'home_value_index': self._round(zhvi.get('dataValue')),
+            'home_value_index_yoy_pct': self._as_pct(zhvi.get('zhviYoY')),
+
+            'median_list_price': self._round(listing.get('medianListPrice')),
+            'median_sale_price': self._round(sale.get('medianSalePrice')),
+            'median_days_to_pending': self._round(
+                latest_listing_period.get('medianDaysToPending')
+            ),
+            # A ratio, not a percentage: 0.98 means homes sell for 98% of list.
+            'median_sale_to_list_ratio': self._round(
+                latest_sale_period.get('medianSaleToList'), 4
+            ),
+            'pct_sold_above_list': self._as_pct(
+                latest_sale_period.get('pctSoldAboveList')
+            ),
+            'pct_sold_below_list': self._as_pct(
+                latest_sale_period.get('pctSoldBelowList')
+            ),
+            'for_sale_inventory': self._round(listing.get('forSaleInventory')),
+            'new_listings': self._round(listing.get('newListings')),
+            'median_rent': self._round(latest_rental.get('zori')),
+
+            # Zillow ships the same index for the parent county/state and the
+            # nation, which is what makes a single region's number meaningful.
+            'benchmarks': {
+                'county_home_value_index': self._round(
+                    (market.get('parentCountyZhviLatest') or {}).get('dataValue')
+                ),
+                'state_home_value_index': self._round(
+                    (market.get('parentStateZhviLatest') or {}).get('dataValue')
+                ),
+                'national_home_value_index': self._round(
+                    (market.get('nationalZhviLatest') or {}).get('dataValue')
+                ),
+                'national_median_rent': self._round(
+                    ((market.get('nationalZori') or [{}])[0]).get('zori')
+                ),
+            },
+        }
+
+        if history:
+            result['history'] = {
+                'home_value_index': self._series(market.get('zhviRange'), 'dataValue'),
+                'median_rent': self._series(rental_range, 'zori'),
+                'median_days_to_pending': self._series(
+                    listing_range, 'medianDaysToPending'
+                ),
+                'median_sale_to_list_ratio': self._series(
+                    sale_range, 'medianSaleToList', 4
+                ),
+            }
+
+        cache.set(cache_key, result, MARKET_STATS_CACHE_TIMEOUT)
+        logger.info(
+            f"Market stats for {region.get('name', location)!r} "
+            f"({region.get('regionTypeName', '?')}) via slug {slug!r}"
+        )
+        return result
+
     def autocomplete(self, query: str) -> List[Dict]:
         """
-        Get location autocomplete suggestions.
-        
-        Args:
-            query: Search query
-            
-        Returns:
-            List of suggestion dictionaries
+        Get location and address autocomplete suggestions.
+
+        Served by Zillow's public suggestions endpoint. The previous
+        implementation POSTed a hand-written GraphQL query to `/zg-graph`, which
+        answers anything outside its persisted-query safelist with
+        QUERY_NOT_IN_SAFELIST — so it always failed and fell through to a stub
+        that just title-cased the input and returned it as a city ("9021" came
+        back as a place). That stub is gone: a query that matches nothing now
+        returns an empty list.
+
+        Region hits carry `region_id` (feed it back to a search), address hits
+        carry `zpid` (feed it to any detail endpoint).
         """
-        # Zillow's autocomplete API - requires specific headers
-        url = "https://www.zillow.com/zg-graph"
-        
-        # GraphQL query for autocomplete
-        payload = {
-            "query": """
-                query getAutoCompleteResults($query: String!) {
-                    zgsAutocompleteRequest(query: $query) {
-                        results {
-                            display
-                            resultType
-                            metaData {
-                                regionId
-                                regionType
-                                city
-                                state
-                                county
-                            }
-                        }
-                    }
-                }
-            """,
-            "variables": {"query": query}
-        }
-        
-        headers = {
-            'Content-Type': 'application/json',
-            'Accept': 'application/json',
-            'Referer': 'https://www.zillow.com/',
-            'Origin': 'https://www.zillow.com',
-        }
-        
+        url = f"{self.AUTOCOMPLETE_URL}?{urlencode({'q': query})}"
+
         try:
-            import requests
-            
-            # Make direct request with proper headers
-            response = requests.post(
-                url,
-                json=payload,
-                headers={**self._get_headers(), **headers},
-                timeout=self.timeout
-            )
-            
-            if response.status_code != 200:
-                # Fallback: Use simple search redirect approach
-                return self._autocomplete_fallback(query)
-            
-            data = response.json()
-            
-            results = data.get('data', {}).get('zgsAutocompleteRequest', {}).get('results', [])
-            
-            suggestions = []
-            for result in results:
-                meta = result.get('metaData', {}) or {}
-                suggestions.append({
-                    'display': result.get('display', ''),
-                    'type': result.get('resultType', ''),
-                    'id': meta.get('regionId', ''),
-                    'city': meta.get('city', ''),
-                    'state': meta.get('state', ''),
-                })
-            
-            if not suggestions:
-                return self._autocomplete_fallback(query)
-            
-            return suggestions
-            
-        except Exception as e:
-            logger.error(f"GraphQL autocomplete failed: {e}, trying fallback")
-            return self._autocomplete_fallback(query)
-    
-    def _autocomplete_fallback(self, query: str) -> List[Dict]:
-        """Fallback autocomplete using search page parsing."""
-        try:
-            # Try to search and extract suggestions from the page
-            search_url = f"{self.BASE_URL}/homes/{query.replace(' ', '-')}_rb/"
-            
-            soup = self.get_soup(search_url)
-            
-            # Return a simple suggestion based on the query
-            return [{
-                'display': query.title(),
-                'type': 'search',
-                'id': '',
-                'city': query.title(),
-                'state': '',
-            }]
-            
-        except Exception as e:
-            logger.error(f"Autocomplete fallback failed: {e}")
-            raise NotFoundException(f"No suggestions found for: {query}")
+            response = self.get(url)
+            payload = response.json()
+        except (ScraperException, ValueError, json.JSONDecodeError) as e:
+            logger.error(f"Autocomplete request failed for {query!r}: {e}")
+            raise ScraperException(f"Failed to fetch suggestions for: {query}")
+
+        suggestions = []
+        for result in payload.get('results') or []:
+            meta = result.get('metaData') or {}
+            result_type = str(result.get('resultType') or '').lower()
+            suggestions.append({
+                'display': result.get('display', ''),
+                # Kept lowercase ('region'/'address') for continuity with the
+                # shape this endpoint has always returned.
+                'type': result_type,
+                # `id` has always been the region id; addresses have none.
+                'id': str(meta.get('regionId') or ''),
+                'city': meta.get('city', ''),
+                'state': meta.get('state', ''),
+                'region_id': self._coerce_int(meta.get('regionId')),
+                'region_type': meta.get('regionType', ''),
+                'county': meta.get('county', ''),
+                'zipcode': meta.get('zipCode', ''),
+                'zpid': self._coerce_int(meta.get('zpid')),
+                'address_type': meta.get('addressType', ''),
+                'latitude': meta.get('lat'),
+                'longitude': meta.get('lng'),
+            })
+
+        logger.info(f"Autocomplete for {query!r} returned {len(suggestions)} suggestions")
+        return suggestions
 
 
 # Singleton instance

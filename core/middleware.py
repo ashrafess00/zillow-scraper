@@ -51,11 +51,15 @@ class RapidAPIOnlyMiddleware:
 
     HEADER = 'HTTP_X_RAPIDAPI_PROXY_SECRET'
 
+    # Class-level (not per-instance) so /health can report them without a handle
+    # on the middleware object. Django builds one instance per worker process, so
+    # these are per-worker counts — check /health a few times, or read the logs,
+    # before concluding the header never arrives.
+    seen_with_header = 0
+    seen_without_header = 0
+
     def __init__(self, get_response):
         self.get_response = get_response
-        # One-shot log flags for the fail-open observation mode.
-        self._seen_with_header = False
-        self._seen_without_header = False
 
     # Read on each request rather than cached at startup, so the secret can be
     # rotated (or overridden in tests) without rebuilding the middleware chain.
@@ -102,18 +106,26 @@ class RapidAPIOnlyMiddleware:
         return self.get_response(request)
 
     def _observe(self, request, provided):
-        """Log the first request seen with, and the first seen without, the header."""
-        if provided and not self._seen_with_header:
-            self._seen_with_header = True
-            logger.info(
-                "RapidAPI proxy secret header IS being sent (path=%s host=%s). "
-                "Safe to set RAPIDAPI_PROXY_SECRET to enable enforcement.",
-                request.path, request.get_host(),
-            )
-        elif not provided and not self._seen_without_header:
-            self._seen_without_header = True
-            logger.info(
-                "Request without the RapidAPI proxy secret header (path=%s host=%s ip=%s). "
-                "Enforcement is off (RAPIDAPI_PROXY_SECRET unset), so it was allowed.",
-                request.path, request.get_host(), request.META.get('REMOTE_ADDR'),
-            )
+        """
+        Count header-bearing vs. bare requests, logging the first of each.
+
+        The counts are what /health reports, so the fail-open state can be
+        checked with a curl instead of grepping a worker's whole log history.
+        """
+        cls = type(self)
+        if provided:
+            cls.seen_with_header += 1
+            if cls.seen_with_header == 1:
+                logger.info(
+                    "RapidAPI proxy secret header IS being sent (path=%s host=%s). "
+                    "Safe to set RAPIDAPI_PROXY_SECRET to enable enforcement.",
+                    request.path, request.get_host(),
+                )
+        else:
+            cls.seen_without_header += 1
+            if cls.seen_without_header == 1:
+                logger.info(
+                    "Request without the RapidAPI proxy secret header (path=%s host=%s ip=%s). "
+                    "Enforcement is off (RAPIDAPI_PROXY_SECRET unset), so it was allowed.",
+                    request.path, request.get_host(), request.META.get('REMOTE_ADDR'),
+                )

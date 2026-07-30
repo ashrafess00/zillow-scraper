@@ -161,6 +161,38 @@ SPECTACULAR_SETTINGS = {
     'SERVE_INCLUDE_SCHEMA': False,
     # Disable security schemes (RapidAPI handles auth, not our API)
     'SECURITY': [],
+    # Root-level tag declaration. Operations were already tagged, but without
+    # this block the tags exist only on the operations themselves — and
+    # RapidAPI's importer builds its endpoint groups from the root declaration,
+    # falling back to one group per operationId for anything it can't place.
+    # Importing without this produced the three real groups plus ~30 empty ones.
+    # Order here is the order the groups appear in the listing.
+    'TAGS': [
+        {
+            'name': 'Properties',
+            'description': (
+                'Property search (by location, coordinates, map bounds, polygon, '
+                'MLS ID, URL or address) and per-property detail by zpid.'
+            ),
+        },
+        {
+            'name': 'Agents',
+            'description': (
+                'Real-estate agent profiles, reviews, and their for-sale, '
+                'for-rent and sold listings.'
+            ),
+        },
+        {
+            'name': 'Utilities',
+            'description': 'Location autocomplete, apartment details, and health.',
+        },
+    ],
+    'POSTPROCESSING_HOOKS': [
+        # drf-spectacular's default hook — must be kept when overriding the list,
+        # or enum components stop being generated.
+        'drf_spectacular.hooks.postprocess_schema_enums',
+        'api.schema.clean_operation_ids',
+    ],
 }
 
 # Celery settings

@@ -5,6 +5,7 @@ Utility functions for parsing Zillow pages.
 import re
 import json
 import logging
+from datetime import datetime, timezone
 from typing import Optional, Dict, Any, List
 from urllib.parse import urlencode
 from bs4 import BeautifulSoup
@@ -154,6 +155,30 @@ def extract_zpid_from_url(url: str) -> Optional[int]:
     return None
 
 
+def _epoch_ms_to_date(value) -> str:
+    """
+    Render a Zillow epoch timestamp as a plain YYYY-MM-DD date.
+
+    Zillow mixes seconds and milliseconds in these fields, so anything past the
+    year-2286 mark in seconds is treated as milliseconds. Returns '' for
+    anything unparseable — these feed a CharField, not a date field.
+    """
+    if value in (None, ''):
+        return ''
+    if isinstance(value, str) and not value.isdigit():
+        return value
+    try:
+        epoch = int(value)
+    except (TypeError, ValueError):
+        return ''
+    if epoch > 10_000_000_000:
+        epoch = epoch / 1000
+    try:
+        return datetime.fromtimestamp(epoch, tz=timezone.utc).strftime('%Y-%m-%d')
+    except (ValueError, OverflowError, OSError):
+        return ''
+
+
 def parse_property_card(card_data: Dict) -> Optional[Dict]:
     """
     Parse property data from a Zillow listing card.
@@ -271,6 +296,19 @@ def parse_property_card(card_data: Dict) -> Optional[Dict]:
                             attribution.get('agentName') or
                             attribution.get('listingOffice', ''))
         
+        # --- Handle zestimate / sold date ---
+        # Sold cards carry no sale price at all: `soldPrice` is an empty string on
+        # every card and `price`/`lastSoldPrice` are absent (verified live
+        # 2026-07-30). Zillow only ships the sale price on the homedetails page.
+        # The zestimate and sold date are present though, and they're what makes a
+        # sold comp usable, so surface both rather than returning a bare address.
+        zestimate = clean_price(
+            card_data.get('zestimate') or home_info.get('zestimate')
+        )
+        date_sold = _epoch_ms_to_date(
+            home_info.get('dateSold') or card_data.get('dateSold')
+        )
+
         # --- Handle property type ---
         property_type = (card_data.get('propertyType') or 
                         card_data.get('home_type', '') or
@@ -325,6 +363,8 @@ def parse_property_card(card_data: Dict) -> Optional[Dict]:
             'latitude': lat,
             'longitude': lng,
             'brokerage': brokerage,
+            'zestimate': zestimate,
+            'date_sold': date_sold,
         }
     except Exception as e:
         logger.warning(f"Failed to parse property card: {e}")

@@ -1,0 +1,239 @@
+{
+  "props": {
+    "pageProps": {
+      "odpMarketAnalytics": {
+        "zhviLatest": {
+          "timePeriodEnd": "2026-06-30",
+          "dataValue": 507622.4326013611,
+          "zhviYoY": -0.05022283617289924,
+          "__typename": "Zhvi"
+        },
+        "nationalZhviLatest": {
+          "dataValue": 372995.19253698044,
+          "__typename": "Zhvi"
+        },
+        "comparisonZhviBatch": [
+          {
+            "regionId": 54,
+            "dataValue": 302999.4861513099,
+            "__typename": "Zhvi"
+          },
+          {
+            "regionId": 1440,
+            "dataValue": 476400.03185428615,
+            "__typename": "Zhvi"
+          }
+        ],
+        "zhviRange": [
+          {
+            "timePeriodEnd": "2026-06-30",
+            "dataValue": 507622.4326013611,
+            "__typename": "Zhvi"
+          },
+          {
+            "timePeriodEnd": "2026-05-31",
+            "dataValue": 509994.697971497,
+            "__typename": "Zhvi"
+          },
+          {
+            "timePeriodEnd": "2026-04-30",
+            "dataValue": 513141.64052977366,
+            "__typename": "Zhvi"
+          },
+          {
+            "timePeriodEnd": "2026-03-31",
+            "dataValue": 516492.3040866992,
+            "__typename": "Zhvi"
+          }
+        ],
+        "nationalZori": [
+          {
+            "timePeriodEnd": "2026-06-30",
+            "zori": 1964.9970873023485,
+            "__typename": "RentalMrkt"
+          },
+          {
+            "timePeriodEnd": "2026-05-31",
+            "zori": 1957.0905656037905,
+            "__typename": "RentalMrkt"
+          },
+          {
+            "timePeriodEnd": "2026-04-30",
+            "zori": 1947.4740389083959,
+            "__typename": "RentalMrkt"
+          },
+          {
+            "timePeriodEnd": "2026-03-31",
+            "zori": 1936.7286348293758,
+            "__typename": "RentalMrkt"
+          }
+        ],
+        "rentalMrktRange": [
+          {
+            "timePeriodEnd": "2026-06-30",
+            "zori": 1614.525308479005,
+            "__typename": "RentalMrkt"
+          },
+          {
+            "timePeriodEnd": "2026-05-31",
+            "zori": 1605.5918654964944,
+            "__typename": "RentalMrkt"
+          },
+          {
+            "timePeriodEnd": "2026-04-30",
+            "zori": 1600.900322965727,
+            "__typename": "RentalMrkt"
+          },
+          {
+            "timePeriodEnd": "2026-03-31",
+            "zori": 1593.833725788948,
+            "__typename": "RentalMrkt"
+          }
+        ],
+        "zhvfIndex1": [],
+        "mrktSaleRange": [
+          {
+            "timePeriodEnd": "2026-05-31",
+            "medianSaleToList": 0.9794553421809189,
+            "pctSoldAboveList": 0.17039342103665703,
+            "pctSoldBelowList": 0.6722162116009369,
+            "__typename": "MrktSale"
+          },
+          {
+            "timePeriodEnd": "2026-04-30",
+            "medianSaleToList": 0.9780494192734467,
+            "pctSoldAboveList": 0.16794713638095773,
+            "pctSoldBelowList": 0.6799324320251707,
+            "__typename": "MrktSale"
+          },
+          {
+            "timePeriodEnd": "2026-03-31",
+            "medianSaleToList": 0.974812920067511,
+            "pctSoldAboveList": 0.13649872368254504,
+            "pctSoldBelowList": 0.7171844161521549,
+            "__typename": "MrktSale"
+          }
+        ],
+        "mrktListingRange": [
+          {
+            "medianDaysToPending": 39.333333333333336,
+            "timePeriodEnd": "2026-06-30",
+            "__typename": "MrktListing"
+          },
+          {
+            "medianDaysToPending": 34.666666666666664,
+            "timePeriodEnd": "2026-05-31",
+            "__typename": "MrktListing"
+          },
+          {
+            "medianDaysToPending": 35.666666666666664,
+            "timePeriodEnd": "2026-04-30",
+            "__typename": "MrktListing"
+          }
+        ],
+        "mrktListingLatest": {
+          "newListings": 1434.6666666666667,
+          "forSaleInventory": 5534.333333333333,
+          "medianListPrice": 571916.3333333334,
+          "timePeriodEnd": "2026-06-30",
+          "__typename": "MrktListing"
+        },
+        "mrktSaleLatest": {
+          "medianSalePrice": 570279.1666666666,
+          "timePeriodEnd": "2026-05-31",
+          "__typename": "MrktSale"
+        },
+        "__typename": "OdpMarketAnalytics",
+        "parentStateZhviLatest": {
+          "dataValue": 302999.4861513099
+        },
+        "parentCountyZhviLatest": {
+          "dataValue": 476400.03185428615
+        }
+      },
+      "requestedRegion": {
+        "rid": 10221,
+        "name": "Austin",
+        "mbr": "POLYGON ((-98.090558 30.06787, -98.090558 30.519484, -97.541748 30.519484, -97.541748 30.06787, -98.090558 30.06787))",
+        "regionTypeName": "city",
+        "regionUrl": {
+          "path": "/austin-tx/",
+          "__typename": "UrlObjectType"
+        },
+        "__typename": "Region"
+      },
+      "zhviRegion": {
+        "rid": 10221,
+        "name": "Austin",
+        "mbr": "POLYGON ((-98.090558 30.06787, -98.090558 30.519484, -97.541748 30.519484, -97.541748 30.06787, -98.090558 30.06787))",
+        "regionTypeName": "city",
+        "regionUrl": {
+          "path": "/austin-tx/",
+          "__typename": "UrlObjectType"
+        },
+        "parentage": [
+          {
+            "name": "United States",
+            "regionType": "COUNTRY",
+            "__typename": "RegionParentageType"
+          },
+          {
+            "name": "TX",
+            "regionType": "STATE",
+            "__typename": "RegionParentageType"
+          },
+          {
+            "name": "Austin, TX",
+            "regionType": "DMA",
+            "__typename": "RegionParentageType"
+          },
+          {
+            "name": "Austin-Round Rock",
+            "regionType": "CBSA",
+            "__typename": "RegionParentageType"
+          },
+          {
+            "name": "Travis County",
+            "regionType": "COUNTY",
+            "__typename": "RegionParentageType"
+          },
+          {
+            "name": "78745",
+            "regionType": "ZIPCODE",
+            "__typename": "RegionParentageType"
+          },
+          {
+            "name": "78753",
+            "regionType": "ZIPCODE",
+            "__typename": "RegionParentageType"
+          },
+          {
+            "name": "78758",
+            "regionType": "ZIPCODE",
+            "__typename": "RegionParentageType"
+          }
+        ],
+        "parentCity": null,
+        "parentCounty": {
+          "name": "Travis County",
+          "regionId": 1440,
+          "regionUrl": {
+            "path": "/travis-county-tx/",
+            "__typename": "UrlObjectType"
+          },
+          "__typename": "Region"
+        },
+        "parentState": {
+          "name": "TX",
+          "regionId": 54,
+          "regionUrl": {
+            "path": "/tx/",
+            "__typename": "UrlObjectType"
+          },
+          "__typename": "Region"
+        },
+        "__typename": "Region"
+      }
+    }
+  }
+}

@@ -47,6 +47,11 @@ urlpatterns = [
     path('nearbyAreas', cache_page(CACHE_TTL)(views.nearby_areas), name='nearby-areas'),
     path('listingStatus', cache_page(CACHE_TTL)(views.listing_status), name='listing-status'),
 
+    # Region market statistics. Cached longer than listings — Zillow publishes
+    # these aggregates monthly, so a 15-min TTL would just re-fetch identical
+    # numbers (the scraper keeps its own 6h cache; see MARKET_STATS_CACHE_TIMEOUT).
+    path('marketStats', cache_page(60 * 60)(views.market_stats), name='market-stats'),
+
     # Other endpoints (Cached)
     path('apartmentDetails', cache_page(CACHE_TTL)(views.apartment_details), name='apartment-details'),
     path('autocomplete', cache_page(CACHE_TTL)(views.autocomplete), name='autocomplete'),

@@ -2,6 +2,7 @@
 Tests for the Zillow scraper API.
 """
 
+import json
 from unittest.mock import patch, MagicMock
 from django.test import TestCase, override_settings
 from rest_framework.test import APITestCase
@@ -94,11 +95,19 @@ class UserAgentManagerTests(TestCase):
         self.assertGreater(len(ua), 0)
     
     def test_get_chrome_user_agent(self):
-        """Test Chrome user agent contains Chrome."""
+        """Test Chrome user agent identifies as Chrome.
+
+        fake-useragent's `.chrome` pool includes mobile builds, which spell the
+        token 'CriOS' (iOS) rather than 'Chrome' — asserting on 'Chrome' alone
+        made this test fail roughly one run in ten.
+        """
         manager = UserAgentManager()
         ua = manager.get_chrome_user_agent()
-        
-        self.assertIn('Chrome', ua)
+
+        self.assertTrue(
+            'Chrome' in ua or 'CriOS' in ua,
+            f"expected a Chrome user agent, got: {ua}",
+        )
 
 
 class APIEndpointTests(APITestCase):
@@ -159,10 +168,26 @@ class APIEndpointTests(APITestCase):
     def test_autocomplete_missing_query(self):
         """Test autocomplete endpoint without query."""
         response = self.client.get('/autocomplete')
-        
+
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data['status_code'], 400)
-    
+
+    @patch('api.views.property_scraper')
+    def test_autocomplete_exposes_region_and_zpid(self, mock_scraper):
+        """Region hits surface region_id; address hits surface zpid."""
+        mock_scraper.autocomplete.return_value = [
+            {'display': 'Seattle, WA', 'type': 'region', 'id': '16037',
+             'region_id': 16037, 'region_type': 'city', 'latitude': 47.6,
+             'longitude': -122.3},
+            {'display': '1006 Hollybluff St Austin, TX 78753', 'type': 'address',
+             'id': '', 'zpid': 29429121, 'address_type': 'forsale_address'},
+        ]
+        response = self.client.get('/autocomplete', {'q': 'seattle'})
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data[0]['region_id'], 16037)
+        self.assertEqual(response.data[0]['region_type'], 'city')
+        self.assertEqual(response.data[1]['zpid'], 29429121)
+
     def test_by_coordinates_missing_params(self):
         """Test bycoordinates endpoint without required params."""
         response = self.client.get('/bycoordinates')
@@ -229,6 +254,30 @@ class RapidAPIOnlyMiddlewareTests(APITestCase):
                 response = self.client.get('/autocomplete', {'q': 'los'})
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+    def test_health_reports_enforcement_state(self):
+        """/health answers 'is the header arriving?' without log archaeology."""
+        response = self.client.get('/health')
+        rapidapi = response.data['rapidapi']
+
+        self.assertTrue(rapidapi['enforcing'])
+        self.assertIn('requests_with_header', rapidapi)
+        self.assertIn('requests_without_header', rapidapi)
+
+    def test_health_counts_header_bearing_requests_when_failing_open(self):
+        from core.middleware import RapidAPIOnlyMiddleware
+
+        before = RapidAPIOnlyMiddleware.seen_with_header
+        with override_settings(RAPIDAPI_PROXY_SECRET=''):
+            with patch('scrapers.property_scraper.property_scraper.autocomplete', return_value=[]):
+                self.client.get(
+                    '/autocomplete', {'q': 'los'}, HTTP_X_RAPIDAPI_PROXY_SECRET='anything'
+                )
+            response = self.client.get('/health')
+
+        self.assertEqual(RapidAPIOnlyMiddleware.seen_with_header, before + 1)
+        self.assertFalse(response.data['rapidapi']['enforcing'])
+        self.assertIn('advice', response.data['rapidapi'])
 
 
 LOCMEM_CACHE = {'default': {'BACKEND': 'django.core.cache.backends.locmem.LocMemCache'}}
@@ -350,14 +399,584 @@ class PropertyDetailScraperTests(TestCase):
         self.assertEqual(result[0]['name'], 'Austin High School')
         self.assertEqual(result[0]['rating'], 8)
 
-    def test_get_similar_homes(self):
+
+@override_settings(CACHES=LOCMEM_CACHE)
+class SimilarHomesTests(TestCase):
+    """
+    Tests for the rebuilt /similarHomes comp search.
+
+    Zillow does not ship `nearbyHomes` on the property object (verified live
+    2026-07-30) and its comps API is behind a persisted-query safelist, so comps
+    are rebuilt from a map-bounds search around the subject. These tests mock
+    `_search_around` — the ranking, not the fetch, is what's under test.
+    """
+
+    def setUp(self):
+        from django.core.cache import cache
+        cache.clear()
+        self.fixture = _load_property_fixture()
+
+    def _scraper(self):
+        from scrapers.property_scraper import property_scraper
+        return property_scraper
+
+    @staticmethod
+    def _card(zpid, **overrides):
+        """A search card matching the fixture subject, before overrides."""
+        card = {
+            'zpid': zpid, 'address': f'{zpid} Test St, Austin, TX, 78701',
+            'url': f'https://www.zillow.com/homedetails/{zpid}_zpid/',
+            'photo_url': f'https://photos.zillowstatic.com/{zpid}.jpg',
+            'price': 750000.0, 'beds': 4, 'baths': 3, 'sqft': 2500,
+            'property_type': 'SINGLE_FAMILY', 'status': 'FOR_SALE',
+            'latitude': 30.2672, 'longitude': -97.7431, 'brokerage': 'Test Realty',
+        }
+        card.update(overrides)
+        return card
+
+    def test_ranks_closest_comp_first(self):
+        """The identical-but-nearer home outranks the further, less similar one."""
         scraper = self._scraper()
-        with patch.object(scraper, '_get_property_data', return_value=self.fixture):
+        cards = [
+            # ~1.4 mi away, 800 sqft smaller, one bed fewer.
+            self._card(33333333, latitude=30.2872, sqft=1700, beds=3),
+            # Same block, same size.
+            self._card(22222222, latitude=30.2675),
+        ]
+        with patch.object(scraper, '_get_property_data', return_value=self.fixture), \
+             patch.object(scraper, '_search_around', return_value=cards):
             homes = scraper.get_similar_homes(12345678)
-        self.assertEqual(len(homes), 2)
-        self.assertEqual(homes[0]['zpid'], 22222222)
-        self.assertEqual(homes[0]['address'], '456 Oak Ave, Austin, TX, 78701')
-        self.assertEqual(homes[0]['photo_url'], 'https://photos.zillowstatic.com/nearby_1.jpg')
+
+        self.assertEqual([h['zpid'] for h in homes], [22222222, 33333333])
+        self.assertLess(homes[0]['similarity_score'], homes[1]['similarity_score'])
+        self.assertLess(homes[0]['distance_miles'], 0.1)
+        self.assertGreater(homes[1]['distance_miles'], 1.0)
+
+    def test_excludes_the_subject_property(self):
+        scraper = self._scraper()
+        cards = [self._card(12345678), self._card(22222222)]
+        with patch.object(scraper, '_get_property_data', return_value=self.fixture), \
+             patch.object(scraper, '_search_around', return_value=cards):
+            homes = scraper.get_similar_homes(12345678)
+        self.assertEqual([h['zpid'] for h in homes], [22222222])
+
+    def test_respects_count(self):
+        scraper = self._scraper()
+        cards = [self._card(1000 + i, latitude=30.2672 + i / 1000) for i in range(20)]
+        with patch.object(scraper, '_get_property_data', return_value=self.fixture), \
+             patch.object(scraper, '_search_around', return_value=cards):
+            homes = scraper.get_similar_homes(12345678, count=3)
+        self.assertEqual(len(homes), 3)
+
+    def test_widens_search_when_tight_box_is_thin(self):
+        """A sparse tight box triggers exactly one wider retry."""
+        scraper = self._scraper()
+        calls = []
+
+        def fake_search(lat, lng, delta, list_type):
+            calls.append(delta)
+            return [self._card(22222222)] if len(calls) == 1 else [
+                self._card(22222222), self._card(33333333), self._card(44444444)
+            ]
+
+        with patch.object(scraper, '_get_property_data', return_value=self.fixture), \
+             patch.object(scraper, '_search_around', side_effect=fake_search):
+            homes = scraper.get_similar_homes(12345678, count=3)
+
+        self.assertEqual(len(calls), 2)
+        self.assertLess(calls[0], calls[1])
+        self.assertEqual(len(homes), 3)
+
+    def test_does_not_widen_when_tight_box_suffices(self):
+        scraper = self._scraper()
+        cards = [self._card(1000 + i) for i in range(10)]
+        with patch.object(scraper, '_get_property_data', return_value=self.fixture), \
+             patch.object(scraper, '_search_around', return_value=cards) as mock_search:
+            scraper.get_similar_homes(12345678, count=8)
+        self.assertEqual(mock_search.call_count, 1)
+
+    def test_list_type_defaults_to_subject_status(self):
+        """Comps for a sold home are other sold homes, not active listings."""
+        scraper = self._scraper()
+        sold = {**self.fixture, 'homeStatus': 'RECENTLY_SOLD'}
+        with patch.object(scraper, '_get_property_data', return_value=sold), \
+             patch.object(scraper, '_search_around', return_value=[]) as mock_search:
+            scraper.get_similar_homes(12345678)
+        self.assertEqual(mock_search.call_args[0][3], 'sold')
+
+    def test_explicit_list_type_overrides_status(self):
+        scraper = self._scraper()
+        with patch.object(scraper, '_get_property_data', return_value=self.fixture), \
+             patch.object(scraper, '_search_around', return_value=[]) as mock_search:
+            scraper.get_similar_homes(12345678, list_type='sold')
+        self.assertEqual(mock_search.call_args[0][3], 'sold')
+
+    def test_returns_empty_without_coordinates(self):
+        """No lat/lng means no box to search — return [] rather than searching."""
+        scraper = self._scraper()
+        no_coords = {**self.fixture, 'latitude': None, 'longitude': None}
+        with patch.object(scraper, '_get_property_data', return_value=no_coords), \
+             patch.object(scraper, '_search_around') as mock_search:
+            homes = scraper.get_similar_homes(12345678)
+        self.assertEqual(homes, [])
+        mock_search.assert_not_called()
+
+    def test_search_failure_yields_empty_not_error(self):
+        """A blocked/empty upstream search must not 500 the endpoint."""
+        scraper = self._scraper()
+        with patch.object(scraper, '_get_property_data', return_value=self.fixture), \
+             patch.object(scraper, 'search_by_map_bounds',
+                          side_effect=NotFoundException('none')):
+            homes = scraper.get_similar_homes(12345678)
+        self.assertEqual(homes, [])
+
+    def test_result_is_cached_per_zpid(self):
+        scraper = self._scraper()
+        cards = [self._card(22222222)]
+        with patch.object(scraper, '_get_property_data', return_value=self.fixture), \
+             patch.object(scraper, '_search_around', return_value=cards) as mock_search:
+            first = scraper.get_similar_homes(12345678, count=1)
+            second = scraper.get_similar_homes(12345678, count=1)
+        self.assertEqual(first, second)
+        self.assertEqual(mock_search.call_count, 1)
+
+    def test_output_serializes(self):
+        """The parser's output must survive SimilarHomeSerializer unchanged."""
+        from api.serializers import SimilarHomeSerializer
+        scraper = self._scraper()
+        cards = [self._card(22222222, latitude=30.2675)]
+        with patch.object(scraper, '_get_property_data', return_value=self.fixture), \
+             patch.object(scraper, '_search_around', return_value=cards):
+            homes = scraper.get_similar_homes(12345678)
+        data = SimilarHomeSerializer(homes, many=True).data
+        self.assertEqual(data[0]['zpid'], 22222222)
+        self.assertIn('distance_miles', data[0])
+        self.assertIn('similarity_score', data[0])
+
+    def test_haversine_known_distance(self):
+        """Sanity-check the distance maths against a known city pair (~2.4 mi)."""
+        scraper = self._scraper()
+        miles = scraper._haversine_miles(30.2672, -97.7431, 30.3005, -97.7522)
+        self.assertAlmostEqual(miles, 2.36, delta=0.1)
+
+    def test_haversine_handles_missing_point(self):
+        scraper = self._scraper()
+        self.assertIsNone(scraper._haversine_miles(30.2672, -97.7431, None, None))
+
+
+def _load_market_fixture():
+    """Load the captured home-values __NEXT_DATA__ used by the market tests."""
+    import json
+    from pathlib import Path
+    path = Path(__file__).resolve().parent / 'fixtures' / 'market_home_values.json'
+    with path.open() as fh:
+        return json.load(fh)
+
+
+@override_settings(CACHES=LOCMEM_CACHE)
+class MarketStatsScraperTests(TestCase):
+    """
+    Tests for /marketStats.
+
+    The fixture is a real Austin home-values `__NEXT_DATA__` payload (captured
+    2026-07-30), trimmed to 4 points per time series. Its `parentage` array
+    deliberately keeps three child zipcodes alongside the five true ancestors,
+    because separating those is the parser's job.
+    """
+
+    def setUp(self):
+        from django.core.cache import cache
+        cache.clear()
+        self.fixture = _load_market_fixture()
+        self.page_props = self.fixture['props']['pageProps']
+
+    def _scraper(self):
+        from scrapers.property_scraper import property_scraper
+        return property_scraper
+
+    def _stats(self, history=False, page_props=None, location='austin-tx'):
+        scraper = self._scraper()
+        props = page_props if page_props is not None else self.page_props
+        with patch.object(scraper, '_fetch_market_page',
+                          return_value=(props, 'austin-tx')):
+            return scraper.get_market_stats(location, history=history)
+
+    def test_headline_figures(self):
+        stats = self._stats()
+        self.assertEqual(stats['home_value_index'], 507622.43)
+        self.assertEqual(stats['median_list_price'], 571916.33)
+        self.assertEqual(stats['median_sale_price'], 570279.17)
+        self.assertEqual(stats['for_sale_inventory'], 5534.33)
+        self.assertEqual(stats['new_listings'], 1434.67)
+        self.assertEqual(stats['median_rent'], 1614.53)
+
+    def test_yoy_is_converted_to_a_percentage(self):
+        """Zillow ships -0.0502 as a ratio; the API publishes -5.02."""
+        stats = self._stats()
+        self.assertEqual(stats['home_value_index_yoy_pct'], -5.02)
+
+    def test_days_to_pending_and_sale_to_list_come_from_the_range_arrays(self):
+        """
+        These never appear on the *Latest objects — only on *Range[0].
+
+        Reading them off mrktListingLatest/mrktSaleLatest yields None, which is
+        how they would silently disappear.
+        """
+        stats = self._stats()
+        self.assertEqual(stats['median_days_to_pending'], 39.33)
+        self.assertEqual(stats['median_sale_to_list_ratio'], 0.9795)
+        self.assertEqual(stats['pct_sold_above_list'], 17.04)
+        self.assertEqual(stats['pct_sold_below_list'], 67.22)
+
+    def test_listing_and_sale_periods_are_reported_separately(self):
+        """Zillow staggers these; collapsing them into one date would lie."""
+        stats = self._stats()
+        self.assertEqual(stats['listings_as_of'], '2026-06-30')
+        self.assertEqual(stats['sales_as_of'], '2026-05-31')
+        self.assertNotEqual(stats['listings_as_of'], stats['sales_as_of'])
+
+    def test_region_identity(self):
+        stats = self._stats()
+        region = stats['region']
+        self.assertEqual(region['id'], 10221)
+        self.assertEqual(region['name'], 'Austin')
+        self.assertEqual(region['type'], 'city')
+        self.assertEqual(region['url'], 'https://www.zillow.com/austin-tx/')
+        self.assertEqual(region['slug'], 'austin-tx')
+
+    def test_parentage_excludes_child_regions(self):
+        """
+        Zillow's `parentage` also lists every zipcode *inside* the city — 73 of
+        them for Austin. Only true ancestors should survive.
+        """
+        stats = self._stats()
+        parentage = stats['region']['parentage']
+        self.assertEqual(
+            [p['type'] for p in parentage],
+            ['country', 'state', 'dma', 'cbsa', 'county'],
+        )
+        self.assertEqual(parentage[0]['name'], 'United States')
+        self.assertEqual(parentage[-1]['name'], 'Travis County')
+        self.assertNotIn('78745', [p['name'] for p in parentage])
+
+    def test_parentage_keeps_ancestors_of_a_neighborhood(self):
+        """A zipcode ranks above a neighborhood, so it must be kept there."""
+        props = json.loads(json.dumps(self.page_props))
+        props['requestedRegion']['regionTypeName'] = 'neighborhood'
+        props['zhviRegion']['regionTypeName'] = 'neighborhood'
+        stats = self._stats(page_props=props)
+        types = [p['type'] for p in stats['region']['parentage']]
+        self.assertIn('zipcode', types)
+        self.assertIn('county', types)
+
+    def test_benchmarks(self):
+        stats = self._stats()
+        self.assertEqual(stats['benchmarks']['county_home_value_index'], 476400.03)
+        self.assertEqual(stats['benchmarks']['state_home_value_index'], 302999.49)
+        self.assertEqual(stats['benchmarks']['national_home_value_index'], 372995.19)
+        self.assertEqual(stats['benchmarks']['national_median_rent'], 1965.0)
+
+    def test_history_omitted_by_default(self):
+        self.assertNotIn('history', self._stats())
+
+    def test_history_included_on_request(self):
+        stats = self._stats(history=True)
+        history = stats['history']
+        self.assertEqual(
+            history['home_value_index'][0],
+            {'date': '2026-06-30', 'value': 507622.43},
+        )
+        self.assertTrue(history['median_rent'])
+        self.assertTrue(history['median_days_to_pending'])
+        self.assertTrue(history['median_sale_to_list_ratio'])
+
+    def test_history_is_cached_separately_from_the_summary(self):
+        """A cached summary must not satisfy a history=true request."""
+        scraper = self._scraper()
+        with patch.object(scraper, '_fetch_market_page',
+                          return_value=(self.page_props, 'austin-tx')):
+            summary = scraper.get_market_stats('austin-tx')
+            detailed = scraper.get_market_stats('austin-tx', history=True)
+        self.assertNotIn('history', summary)
+        self.assertIn('history', detailed)
+
+    def test_result_is_cached(self):
+        scraper = self._scraper()
+        with patch.object(scraper, '_fetch_market_page',
+                          return_value=(self.page_props, 'austin-tx')) as mock_fetch:
+            first = scraper.get_market_stats('austin-tx')
+            second = scraper.get_market_stats('austin-tx')
+        self.assertEqual(first, second)
+        self.assertEqual(mock_fetch.call_count, 1)
+
+    def test_missing_blocks_do_not_raise(self):
+        """A shape change should degrade to nulls, not a 500."""
+        stats = self._stats(page_props={'odpMarketAnalytics': {}})
+        self.assertIsNone(stats['home_value_index'])
+        self.assertIsNone(stats['median_list_price'])
+        self.assertEqual(stats['region']['name'], '')
+
+    def test_output_serializes(self):
+        from api.serializers import MarketStatsSerializer
+        data = MarketStatsSerializer(self._stats(history=True)).data
+        self.assertEqual(data['home_value_index'], 507622.43)
+        self.assertEqual(data['region']['name'], 'Austin')
+        self.assertEqual(data['region']['parentage'][0]['name'], 'United States')
+        self.assertTrue(data['history']['home_value_index'])
+
+
+@override_settings(CACHES=LOCMEM_CACHE)
+class MarketStatsSlugResolutionTests(TestCase):
+    """
+    Slug resolution for /marketStats.
+
+    `/austin-tx/home-values/` resolves but `/90210/home-values/` 404s, so a miss
+    falls back to an autocomplete lookup. The literal slug must be tried first —
+    resolving eagerly would double the request count on the common path.
+    """
+
+    def setUp(self):
+        from django.core.cache import cache
+        cache.clear()
+
+    def _scraper(self):
+        from scrapers.property_scraper import property_scraper
+        return property_scraper
+
+    def test_literal_slug_is_tried_first_and_costs_no_lookup(self):
+        scraper = self._scraper()
+        with patch.object(scraper, '_load_market_page',
+                          return_value={'odpMarketAnalytics': {}}) as mock_load, \
+             patch.object(scraper, 'autocomplete') as mock_auto:
+            props, slug = scraper._fetch_market_page('austin-tx')
+        self.assertEqual(slug, 'austin-tx')
+        self.assertEqual(mock_load.call_count, 1)
+        mock_auto.assert_not_called()
+
+    def test_free_text_location_is_slugified(self):
+        scraper = self._scraper()
+        with patch.object(scraper, '_load_market_page',
+                          return_value={'odpMarketAnalytics': {}}) as mock_load:
+            _, slug = scraper._fetch_market_page('Austin, TX')
+        self.assertEqual(slug, 'austin-tx')
+        self.assertEqual(mock_load.call_args[0][0], 'austin-tx')
+
+    def test_zipcode_falls_back_to_autocomplete(self):
+        """`/90210/home-values/` 404s; the city-state-zip form resolves."""
+        scraper = self._scraper()
+        calls = []
+
+        def fake_load(slug):
+            calls.append(slug)
+            return {'odpMarketAnalytics': {}} if slug == 'los-angeles-ca-90210' else None
+
+        with patch.object(scraper, '_load_market_page', side_effect=fake_load), \
+             patch.object(scraper, 'autocomplete', return_value=[{
+                 'type': 'region', 'region_type': 'zipcode', 'city': 'Los Angeles',
+                 'state': 'CA', 'zipcode': '90210',
+             }]):
+            _, slug = scraper._fetch_market_page('90210')
+
+        self.assertEqual(slug, 'los-angeles-ca-90210')
+        self.assertEqual(calls[0], '90210')
+
+    def test_state_only_zip_form_is_tried_as_a_second_fallback(self):
+        scraper = self._scraper()
+
+        def fake_load(slug):
+            return {'odpMarketAnalytics': {}} if slug == 'ca-90210' else None
+
+        with patch.object(scraper, '_load_market_page', side_effect=fake_load), \
+             patch.object(scraper, 'autocomplete', return_value=[{
+                 'type': 'region', 'region_type': 'zipcode', 'city': 'Los Angeles',
+                 'state': 'CA', 'zipcode': '90210',
+             }]):
+            _, slug = scraper._fetch_market_page('90210')
+        self.assertEqual(slug, 'ca-90210')
+
+    def test_unresolvable_location_raises_not_found(self):
+        scraper = self._scraper()
+        with patch.object(scraper, '_load_market_page', return_value=None), \
+             patch.object(scraper, 'autocomplete', return_value=[]):
+            with self.assertRaises(NotFoundException):
+                scraper._fetch_market_page('zzzqqqxyz')
+
+    def test_autocomplete_failure_does_not_mask_the_not_found(self):
+        from scrapers.base import ScraperException
+        scraper = self._scraper()
+        with patch.object(scraper, '_load_market_page', return_value=None), \
+             patch.object(scraper, 'autocomplete', side_effect=ScraperException('boom')):
+            with self.assertRaises(NotFoundException):
+                scraper._fetch_market_page('somewhere')
+
+
+class OpenAPISchemaTests(TestCase):
+    """
+    Guards on the RapidAPI-facing OpenAPI document.
+
+    RapidAPI builds its endpoint groups from the root-level `tags` declaration
+    and falls back to the operationId prefix for anything it can't place. An
+    import without both produced the three real groups plus one empty group per
+    endpoint. These assertions are what keep a newly added endpoint from
+    reintroducing that.
+    """
+
+    def _schema(self):
+        from drf_spectacular.generators import SchemaGenerator
+        return SchemaGenerator().get_schema(request=None, public=True)
+
+    def _operations(self, schema):
+        methods = {'get', 'put', 'post', 'delete', 'patch', 'head', 'options'}
+        for path, item in schema['paths'].items():
+            for method, operation in item.items():
+                if method.lower() in methods and isinstance(operation, dict):
+                    yield path, operation
+
+    def test_root_tags_are_declared(self):
+        schema = self._schema()
+        names = [t['name'] for t in schema.get('tags', [])]
+        self.assertEqual(sorted(names), ['Agents', 'Properties', 'Utilities'])
+
+    def test_every_operation_tag_is_declared_at_root(self):
+        """An undeclared tag is what makes RapidAPI invent a fallback group."""
+        schema = self._schema()
+        declared = {t['name'] for t in schema.get('tags', [])}
+        for path, operation in self._operations(schema):
+            tags = operation.get('tags') or []
+            self.assertTrue(tags, f"{path} has no tag")
+            for tag in tags:
+                self.assertIn(tag, declared, f"{path} uses undeclared tag {tag!r}")
+
+    def test_operation_ids_have_no_action_suffix(self):
+        """`similarHomes_list` becomes a group named 'similarHomes' on import."""
+        schema = self._schema()
+        for path, operation in self._operations(schema):
+            operation_id = operation.get('operationId', '')
+            self.assertFalse(
+                operation_id.endswith(
+                    ('_retrieve', '_list', '_create', '_update', '_destroy',
+                     '_partial_update')
+                ),
+                f"{path} has an unstripped operationId: {operation_id}",
+            )
+
+    def test_operation_ids_are_unique(self):
+        schema = self._schema()
+        ids = [op.get('operationId') for _, op in self._operations(schema)]
+        self.assertEqual(len(ids), len(set(ids)), 'duplicate operationId in schema')
+
+    def test_similar_homes_exposes_ranking_fields(self):
+        """The comp ranking fields must reach the published schema."""
+        schema = self._schema()
+        properties = schema['components']['schemas']['SimilarHome']['properties']
+        self.assertIn('distance_miles', properties)
+        self.assertIn('similarity_score', properties)
+
+    def test_autocomplete_exposes_zpid(self):
+        schema = self._schema()
+        properties = schema['components']['schemas']['AutocompleteSuggestion']['properties']
+        self.assertIn('zpid', properties)
+        self.assertIn('region_id', properties)
+
+
+class AutocompleteScraperTests(TestCase):
+    """
+    Tests for the rewritten autocomplete parser.
+
+    Shapes here are copied from live responses of Zillow's suggestions endpoint
+    (2026-07-30). The old implementation POSTed an unsafelisted GraphQL query,
+    always failed, and returned a stub echoing the input as a city name — these
+    assert on real fields so that regression is visible.
+    """
+
+    def _scraper(self):
+        from scrapers.property_scraper import property_scraper
+        return property_scraper
+
+    @staticmethod
+    def _response(payload):
+        response = MagicMock()
+        response.json.return_value = payload
+        return response
+
+    REGION_HIT = {
+        'display': 'Seattle, WA', 'resultType': 'Region',
+        'metaData': {'regionId': 16037, 'regionType': 'city', 'city': 'Seattle',
+                     'county': 'King County', 'state': 'WA',
+                     'lat': 47.618, 'lng': -122.351},
+    }
+    ADDRESS_HIT = {
+        'display': '1006 Hollybluff St Austin, TX 78753', 'resultType': 'Address',
+        'metaData': {'addressType': 'forsale_address', 'streetNumber': '1006',
+                     'streetName': 'Hollybluff St', 'city': 'Austin', 'state': 'TX',
+                     'zipCode': '78753', 'zpid': 29429121,
+                     'lat': 30.367, 'lng': -97.675},
+    }
+
+    def test_parses_region_hit(self):
+        scraper = self._scraper()
+        with patch.object(scraper, 'get',
+                          return_value=self._response({'results': [self.REGION_HIT]})):
+            result = scraper.autocomplete('seattle')
+        self.assertEqual(len(result), 1)
+        hit = result[0]
+        self.assertEqual(hit['type'], 'region')
+        self.assertEqual(hit['region_id'], 16037)
+        self.assertEqual(hit['region_type'], 'city')
+        self.assertEqual(hit['county'], 'King County')
+        self.assertEqual(hit['latitude'], 47.618)
+        self.assertIsNone(hit['zpid'])
+        # `id` has always been the region id — keep it that way for existing callers.
+        self.assertEqual(hit['id'], '16037')
+
+    def test_parses_address_hit_with_zpid(self):
+        scraper = self._scraper()
+        with patch.object(scraper, 'get',
+                          return_value=self._response({'results': [self.ADDRESS_HIT]})):
+            result = scraper.autocomplete('1006 Hollybluff')
+        hit = result[0]
+        self.assertEqual(hit['type'], 'address')
+        self.assertEqual(hit['zpid'], 29429121)
+        self.assertEqual(hit['zipcode'], '78753')
+        self.assertEqual(hit['address_type'], 'forsale_address')
+        self.assertIsNone(hit['region_id'])
+
+    def test_no_match_returns_empty_not_a_fake_city(self):
+        """The old stub turned '9021' into a city named '9021'."""
+        scraper = self._scraper()
+        with patch.object(scraper, 'get',
+                          return_value=self._response({'results': []})):
+            self.assertEqual(scraper.autocomplete('zzzqqqxyz'), [])
+
+    def test_request_failure_raises(self):
+        from scrapers.base import ScraperException
+        scraper = self._scraper()
+        with patch.object(scraper, 'get', side_effect=ScraperException('boom')):
+            with self.assertRaises(ScraperException):
+                scraper.autocomplete('seattle')
+
+    def test_output_serializes(self):
+        from api.serializers import AutocompleteSuggestionSerializer
+        scraper = self._scraper()
+        with patch.object(scraper, 'get', return_value=self._response(
+                {'results': [self.REGION_HIT, self.ADDRESS_HIT]})):
+            result = scraper.autocomplete('seattle')
+        data = AutocompleteSuggestionSerializer(result, many=True).data
+        self.assertEqual(data[0]['region_id'], 16037)
+        self.assertEqual(data[1]['zpid'], 29429121)
+
+    def test_uses_the_session_pool_not_bare_requests(self):
+        """
+        Scraping paths must go through BaseScraper.get (curl_cffi + proxy +
+        impersonation). The old implementation called `requests.post` directly,
+        which bypasses all three and gets blocked.
+        """
+        scraper = self._scraper()
+        with patch.object(scraper, 'get',
+                          return_value=self._response({'results': []})) as mock_get:
+            scraper.autocomplete('seattle')
+        mock_get.assert_called_once()
+        self.assertIn('autocomplete/v3/suggestions', mock_get.call_args[0][0])
 
 
 @override_settings(CACHES=LOCMEM_CACHE)
@@ -402,12 +1021,83 @@ class PropertyDetailEndpointTests(APITestCase):
     @patch('api.views.property_scraper')
     def test_similar_homes_endpoint(self, mock_scraper):
         mock_scraper.get_similar_homes.return_value = [
-            {'zpid': 22222222, 'address': '456 Oak Ave', 'price': 720000.0},
+            {'zpid': 22222222, 'address': '456 Oak Ave', 'price': 720000.0,
+             'distance_miles': 0.21, 'similarity_score': 0.34},
         ]
         response = self.client.get('/similarHomes', {'zpid': '12345678'})
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(len(response.data), 1)
         self.assertEqual(response.data[0]['zpid'], 22222222)
+        self.assertEqual(response.data[0]['distance_miles'], 0.21)
+        mock_scraper.get_similar_homes.assert_called_once_with(
+            12345678, count=8, list_type=None
+        )
+
+    @patch('api.views.property_scraper')
+    def test_similar_homes_passes_count_and_list_type(self, mock_scraper):
+        mock_scraper.get_similar_homes.return_value = []
+        response = self.client.get(
+            '/similarHomes', {'zpid': '12345678', 'count': '3', 'listType': 'sold'}
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        mock_scraper.get_similar_homes.assert_called_once_with(
+            12345678, count=3, list_type='sold'
+        )
+
+    def test_similar_homes_rejects_bad_list_type(self):
+        response = self.client.get(
+            '/similarHomes', {'zpid': '12345678', 'listType': 'for-lease'}
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['status_code'], 400)
+
+    @patch('api.views.property_scraper')
+    def test_market_stats_endpoint(self, mock_scraper):
+        mock_scraper.get_market_stats.return_value = {
+            'region': {'id': 10221, 'name': 'Austin', 'type': 'city',
+                       'url': '', 'slug': 'austin-tx', 'parentage': []},
+            'listings_as_of': '2026-06-30', 'sales_as_of': '2026-05-31',
+            'home_value_index': 507622.43, 'home_value_index_yoy_pct': -5.02,
+            'benchmarks': {},
+        }
+        response = self.client.get('/marketStats', {'location': 'austin-tx'})
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['home_value_index'], 507622.43)
+        self.assertEqual(response.data['region']['name'], 'Austin')
+        mock_scraper.get_market_stats.assert_called_once_with(
+            'austin-tx', history=False
+        )
+
+    def test_market_stats_requires_location(self):
+        response = self.client.get('/marketStats')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['status_code'], 400)
+
+    @patch('api.views.property_scraper')
+    def test_market_stats_history_flag(self, mock_scraper):
+        mock_scraper.get_market_stats.return_value = {
+            'region': {}, 'benchmarks': {}, 'history': {},
+        }
+        for raw in ('true', 'True', '1', 'yes'):
+            mock_scraper.get_market_stats.reset_mock()
+            self.client.get('/marketStats', {'location': 'austin-tx', 'history': raw})
+            self.assertEqual(
+                mock_scraper.get_market_stats.call_args.kwargs['history'], True,
+                f"history={raw!r} should enable the series",
+            )
+
+        mock_scraper.get_market_stats.reset_mock()
+        self.client.get('/marketStats', {'location': 'austin-tx', 'history': 'false'})
+        self.assertEqual(
+            mock_scraper.get_market_stats.call_args.kwargs['history'], False
+        )
+
+    def test_similar_homes_rejects_out_of_range_count(self):
+        response = self.client.get(
+            '/similarHomes', {'zpid': '12345678', 'count': '99'}
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['status_code'], 400)
 
 
 @override_settings(CACHES=LOCMEM_CACHE)

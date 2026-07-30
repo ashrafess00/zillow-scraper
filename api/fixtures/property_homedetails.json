@@ -144,41 +144,5 @@
   "schools": [
     {"name": "Austin High School", "rating": 8, "level": "High", "grades": "9-12", "distance": 1.2, "type": "Public", "link": "https://www.zillow.com/school/x"},
     {"name": "Central Elementary", "rating": 9, "level": "Elementary", "grades": "K-5", "distance": 0.4, "type": "Public", "link": ""}
-  ],
-  "nearbyHomes": [
-    {
-      "zpid": 22222222,
-      "streetAddress": "456 Oak Ave",
-      "city": "Austin",
-      "state": "TX",
-      "zipcode": "78701",
-      "price": 720000,
-      "bedrooms": 3,
-      "bathrooms": 2,
-      "livingArea": 2200,
-      "homeType": "SINGLE_FAMILY",
-      "homeStatus": "FOR_SALE",
-      "latitude": 30.2680,
-      "longitude": -97.7440,
-      "miniCardPhotos": [
-        {"mixedSources": {"jpeg": [{"url": "https://photos.zillowstatic.com/nearby_1.jpg", "width": 384}]}}
-      ]
-    },
-    {
-      "zpid": 33333333,
-      "streetAddress": "789 Elm St",
-      "city": "Austin",
-      "state": "TX",
-      "zipcode": "78701",
-      "price": 810000,
-      "bedrooms": 4,
-      "bathrooms": 3,
-      "livingArea": 2700,
-      "homeType": "SINGLE_FAMILY",
-      "homeStatus": "FOR_SALE",
-      "latitude": 30.2690,
-      "longitude": -97.7450,
-      "miniCardPhotos": []
-    }
   ]
 }

@@ -6,7 +6,7 @@ info:
 paths:
   /agentByLocation:
     get:
-      operationId: agentByLocation_retrieve
+      operationId: agentByLocation
       description: Returns a list of real estate agents in the specified location.
       summary: Get agents by location
       parameters:
@@ -39,7 +39,7 @@ paths:
           description: ''
   /agentForRentProperties:
     get:
-      operationId: agentForRentProperties_retrieve
+      operationId: agentForRentProperties
       description: Returns properties currently for rent by a specific agent.
       summary: Get agent's rental properties
       parameters:
@@ -77,7 +77,7 @@ paths:
           description: ''
   /agentForSaleProperties:
     get:
-      operationId: agentForSaleProperties_retrieve
+      operationId: agentForSaleProperties
       description: Returns properties currently for sale by a specific agent.
       summary: Get agent's for-sale properties
       parameters:
@@ -115,7 +115,7 @@ paths:
           description: ''
   /agentInfo:
     get:
-      operationId: agentInfo_retrieve
+      operationId: agentInfo
       description: Returns detailed information about a specific agent.
       summary: Get agent information
       parameters:
@@ -148,7 +148,7 @@ paths:
           description: ''
   /agentReviews:
     get:
-      operationId: agentReviews_retrieve
+      operationId: agentReviews
       description: Returns reviews for a specific agent.
       summary: Get agent reviews
       parameters:
@@ -186,7 +186,7 @@ paths:
           description: ''
   /agentSoldProperties:
     get:
-      operationId: agentSoldProperties_retrieve
+      operationId: agentSoldProperties
       description: Returns properties previously sold by a specific agent.
       summary: Get agent's sold properties
       parameters:
@@ -224,7 +224,7 @@ paths:
           description: ''
   /apartmentDetails:
     get:
-      operationId: apartmentDetails_retrieve
+      operationId: apartmentDetails
       description: Get detailed information about an apartment or building.
       summary: Get apartment details
       parameters:
@@ -253,8 +253,11 @@ paths:
           description: ''
   /autocomplete:
     get:
-      operationId: autocomplete_list
-      description: Get autocomplete suggestions for a location query.
+      operationId: autocomplete
+      description: Autocomplete suggestions for a location or address query. Region
+        hits carry `region_id`, `region_type` and coordinates; address hits carry
+        a `zpid` that can be passed straight to any detail endpoint. Returns an empty
+        list when nothing matches.
       summary: Location autocomplete
       parameters:
       - in: query
@@ -284,7 +287,7 @@ paths:
           description: ''
   /byAddress:
     get:
-      operationId: byAddress_retrieve
+      operationId: byAddress
       description: Resolve a street address to a single property's full details —
         the same rich payload as /property, without needing a zpid. Returns the best-matching
         property.
@@ -315,7 +318,7 @@ paths:
           description: ''
   /bycoordinates:
     get:
-      operationId: bycoordinates_retrieve
+      operationId: bycoordinates
       description: Search for properties near specific coordinates.
       summary: Search properties by coordinates
       parameters:
@@ -366,7 +369,7 @@ paths:
           description: ''
   /bylocation:
     get:
-      operationId: bylocation_retrieve
+      operationId: bylocation
       description: Search for properties in a specific location with optional filters.
       summary: Search properties by location
       parameters:
@@ -440,7 +443,7 @@ paths:
           description: ''
   /bymapbounds:
     get:
-      operationId: bymapbounds_retrieve
+      operationId: bymapbounds
       description: Search for properties within geographic map bounds.
       summary: Search properties by map bounds
       parameters:
@@ -503,7 +506,7 @@ paths:
           description: ''
   /bymlsid:
     get:
-      operationId: bymlsid_retrieve
+      operationId: bymlsid
       description: Search for properties by MLS listing ID.
       summary: Search properties by MLS ID
       parameters:
@@ -537,7 +540,7 @@ paths:
           description: ''
   /bypolygon:
     get:
-      operationId: bypolygon_retrieve
+      operationId: bypolygon
       description: Search for properties within a polygon defined by coordinates.
       summary: Search properties by polygon
       parameters:
@@ -582,7 +585,7 @@ paths:
           description: ''
   /byurl:
     get:
-      operationId: byurl_retrieve
+      operationId: byurl
       description: Parse and return properties from a Zillow search URL.
       summary: Parse properties from Zillow URL
       parameters:
@@ -611,7 +614,7 @@ paths:
           description: ''
   /health:
     get:
-      operationId: health_retrieve
+      operationId: health
       description: Lightweight liveness/readiness probe. Reports the status of the
         Redis cache and the database. Always returns HTTP 200; check the `status`
         field (`ok` or `degraded`) and the per-component results in `checks`.
@@ -629,7 +632,7 @@ paths:
           description: ''
   /homeFacts:
     get:
-      operationId: homeFacts_retrieve
+      operationId: homeFacts
       description: The complete RESO facts block for a property by zpid — appliances,
         heating, cooling, flooring, construction, parking, utilities, HOA and more.
         Null fields are omitted, so the key set varies by listing.
@@ -660,7 +663,7 @@ paths:
           description: ''
   /listingAgent:
     get:
-      operationId: listingAgent_retrieve
+      operationId: listingAgent
       description: Listing agent, co-listing agent, broker and MLS attribution for
         a property by zpid — names, phone numbers, licenses and MLS id.
       summary: Get listing agent and broker
@@ -690,7 +693,7 @@ paths:
           description: ''
   /listingStatus:
     get:
-      operationId: listingStatus_retrieve
+      operationId: listingStatus
       description: Listing status, price-cut tracking and listing-type flags for a
         property by zpid — most recent price change and date, days on Zillow, and
         FSBO / foreclosure / auction / new-build / coming-soon / pending booleans.
@@ -719,9 +722,50 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
           description: ''
+  /marketStats:
+    get:
+      operationId: marketStats
+      description: |-
+        Market statistics for a city, zipcode, neighborhood, county or state — Zillow Home Value Index and its year-over-year change, median list and sale prices, median days to pending, sale-to-list ratio, inventory, new listings and median rent, plus the parent county / state / national figures for context.
+
+        Zillow publishes listing and sale aggregates on separate monthly cycles, so `listings_as_of` and `sales_as_of` are reported separately rather than reconciled into one date.
+
+        Pass `history=true` for the monthly series behind these numbers (home value index and rent go back ~100 months).
+      summary: Get market statistics for a region
+      parameters:
+      - in: query
+        name: history
+        schema:
+          type: boolean
+        description: Include the monthly time series (default false)
+      - in: query
+        name: location
+        schema:
+          type: string
+        description: 'Region to look up: a slug (`austin-tx`), a place name (`Austin,
+          TX`), a zipcode (`90210`), a neighborhood (`park-slope-brooklyn-ny`), a
+          county (`travis-county-tx`) or a state (`tx`).'
+        required: true
+      tags:
+      - Properties
+      security:
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MarketStats'
+          description: ''
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+          description: ''
   /monthlyCost:
     get:
-      operationId: monthlyCost_retrieve
+      operationId: monthlyCost
       description: 'Estimated monthly ownership cost for a property by zpid: principal
         & interest amortized from Zillow''s live mortgage rate, property tax, HOA,
         plus estimated home insurance and PMI. Fields Zillow does not publish are
@@ -768,7 +812,7 @@ paths:
           description: ''
   /nearbyAreas:
     get:
-      operationId: nearbyAreas_retrieve
+      operationId: nearbyAreas
       description: Regions Zillow links from a listing by zpid. Each entry includes
         the Zillow region path, which can be passed straight to /bylocation or /byurl
         to widen a search.
@@ -799,7 +843,7 @@ paths:
           description: ''
   /openHouses:
     get:
-      operationId: openHouses_list
+      operationId: openHouses
       description: Scheduled open houses for a property by zpid. Most listings have
         none; an empty list means no upcoming open house, not an error.
       summary: Get open house schedule
@@ -831,7 +875,7 @@ paths:
           description: ''
   /photos:
     get:
-      operationId: photos_retrieve
+      operationId: photos
       description: All photo URLs (largest available size) for a property by zpid.
       summary: Get property photos
       parameters:
@@ -860,7 +904,7 @@ paths:
           description: ''
   /priceHistory:
     get:
-      operationId: priceHistory_list
+      operationId: priceHistory
       description: Chronological list of price/listing events for a property by zpid.
       summary: Get property price history
       parameters:
@@ -891,7 +935,7 @@ paths:
           description: ''
   /property:
     get:
-      operationId: property_retrieve
+      operationId: property
       description: Full details for a single property by its Zillow Property ID (zpid).
         This is the primary lookup that warms the shared cache for the other zpid
         endpoints (zestimate, priceHistory, taxHistory, photos, schools, similarHomes).
@@ -922,7 +966,7 @@ paths:
           description: ''
   /schools:
     get:
-      operationId: schools_list
+      operationId: schools
       description: Assigned/nearby schools with ratings for a property by zpid.
       summary: Get nearby schools
       parameters:
@@ -953,10 +997,25 @@ paths:
           description: ''
   /similarHomes:
     get:
-      operationId: similarHomes_list
-      description: Comparable and nearby homes for a property by zpid.
+      operationId: similarHomes
+      description: Comparable homes near a property, closest comp first. Each result
+        carries `distance_miles` from the subject and a `similarity_score` (lower
+        is a closer match, weighing distance, size, beds, baths, price and property
+        type). `listType` defaults to the subject's own market, so comps for a sold
+        home are other sold homes.
       summary: Get similar / nearby homes
       parameters:
+      - in: query
+        name: count
+        schema:
+          type: integer
+        description: How many comps to return (1-40, default 8)
+      - in: query
+        name: listType
+        schema:
+          type: string
+        description: 'Comp market: for-sale, for-rent, sold. Defaults to the subject
+          property''s status.'
       - in: query
         name: zpid
         schema:
@@ -974,7 +1033,7 @@ paths:
               schema:
                 type: array
                 items:
-                  $ref: '#/components/schemas/Property'
+                  $ref: '#/components/schemas/SimilarHome'
           description: ''
         '404':
           content:
@@ -984,7 +1043,7 @@ paths:
           description: ''
   /taxAssessment:
     get:
-      operationId: taxAssessment_retrieve
+      operationId: taxAssessment
       description: 'Current-year tax assessment and parcel identifiers for a property
         by zpid: assessed value, annual tax, county rate, parcel id, county FIPS and
         zoning. Use /taxHistory for the year-by-year series.'
@@ -1015,7 +1074,7 @@ paths:
           description: ''
   /taxHistory:
     get:
-      operationId: taxHistory_list
+      operationId: taxHistory
       description: Per-year tax paid and assessed value for a property by zpid.
       summary: Get property tax history
       parameters:
@@ -1046,7 +1105,7 @@ paths:
           description: ''
   /zestimate:
     get:
-      operationId: zestimate_retrieve
+      operationId: zestimate
       description: Zestimate and Rent Zestimate for a property by zpid.
       summary: Get property valuation (Zestimate)
       parameters:
@@ -1145,8 +1204,35 @@ components:
           type: string
         type:
           type: string
+          description: '''region'' or ''address'''
         id:
           type: string
+        city:
+          type: string
+        state:
+          type: string
+        region_id:
+          type: integer
+          nullable: true
+        region_type:
+          type: string
+        county:
+          type: string
+        zipcode:
+          type: string
+        zpid:
+          type: integer
+          nullable: true
+        address_type:
+          type: string
+        latitude:
+          type: number
+          format: double
+          nullable: true
+        longitude:
+          type: number
+          format: double
+          nullable: true
       required:
       - display
       - type
@@ -1176,8 +1262,12 @@ components:
         checks:
           type: object
           additionalProperties: {}
+        rapidapi:
+          type: object
+          additionalProperties: {}
       required:
       - checks
+      - rapidapi
       - status
       - timestamp
       - version
@@ -1299,6 +1389,158 @@ components:
         favorite_count:
           type: integer
           nullable: true
+    MarketAncestor:
+      type: object
+      description: A region containing the one being described.
+      properties:
+        name:
+          type: string
+        type:
+          type: string
+          description: country, state, dma, cbsa, county or city
+      required:
+      - name
+    MarketBenchmark:
+      type: object
+      description: Parent-region figures that give a region's numbers context.
+      properties:
+        county_home_value_index:
+          type: number
+          format: double
+          nullable: true
+        state_home_value_index:
+          type: number
+          format: double
+          nullable: true
+        national_home_value_index:
+          type: number
+          format: double
+          nullable: true
+        national_median_rent:
+          type: number
+          format: double
+          nullable: true
+    MarketHistory:
+      type: object
+      description: Monthly series, newest first. Only present when history=true.
+      properties:
+        home_value_index:
+          type: array
+          items:
+            $ref: '#/components/schemas/MarketSeriesPoint'
+        median_rent:
+          type: array
+          items:
+            $ref: '#/components/schemas/MarketSeriesPoint'
+        median_days_to_pending:
+          type: array
+          items:
+            $ref: '#/components/schemas/MarketSeriesPoint'
+        median_sale_to_list_ratio:
+          type: array
+          items:
+            $ref: '#/components/schemas/MarketSeriesPoint'
+    MarketRegion:
+      type: object
+      description: The region a /marketStats response describes.
+      properties:
+        id:
+          type: integer
+          nullable: true
+        name:
+          type: string
+        type:
+          type: string
+          description: city, zipcode, neighborhood, county or state
+        url:
+          type: string
+        slug:
+          type: string
+        parentage:
+          type: array
+          items:
+            $ref: '#/components/schemas/MarketAncestor'
+          description: Regions containing this one, widest first (country → state
+            → county)
+    MarketSeriesPoint:
+      type: object
+      description: One month of a market time series.
+      properties:
+        date:
+          type: string
+        value:
+          type: number
+          format: double
+      required:
+      - date
+      - value
+    MarketStats:
+      type: object
+      description: Market statistics for a region.
+      properties:
+        region:
+          $ref: '#/components/schemas/MarketRegion'
+        listings_as_of:
+          type: string
+        sales_as_of:
+          type: string
+        home_value_index:
+          type: number
+          format: double
+          nullable: true
+          description: Zillow Home Value Index (ZHVI) for the region
+        home_value_index_yoy_pct:
+          type: number
+          format: double
+          nullable: true
+          description: Year-over-year change in ZHVI, as a percentage (-5.02 = down
+            5.02%)
+        median_list_price:
+          type: number
+          format: double
+          nullable: true
+        median_sale_price:
+          type: number
+          format: double
+          nullable: true
+        median_days_to_pending:
+          type: number
+          format: double
+          nullable: true
+        median_sale_to_list_ratio:
+          type: number
+          format: double
+          nullable: true
+          description: 'A ratio, not a percentage: 0.98 means homes sell for 98% of
+            list price'
+        pct_sold_above_list:
+          type: number
+          format: double
+          nullable: true
+        pct_sold_below_list:
+          type: number
+          format: double
+          nullable: true
+        for_sale_inventory:
+          type: number
+          format: double
+          nullable: true
+        new_listings:
+          type: number
+          format: double
+          nullable: true
+        median_rent:
+          type: number
+          format: double
+          nullable: true
+          description: Zillow Observed Rent Index (ZORI)
+        benchmarks:
+          $ref: '#/components/schemas/MarketBenchmark'
+        history:
+          $ref: '#/components/schemas/MarketHistory'
+      required:
+      - benchmarks
+      - region
     MonthlyCost:
       type: object
       description: Serializer for the estimated monthly ownership-cost breakdown.
@@ -1551,6 +1793,12 @@ components:
           nullable: true
         brokerage:
           type: string
+        zestimate:
+          type: number
+          format: double
+          nullable: true
+        date_sold:
+          type: string
       required:
       - address
     PropertyDetails:
@@ -1675,6 +1923,62 @@ components:
           type: string
         link:
           type: string
+    SimilarHome:
+      type: object
+      description: A comp from /similarHomes — a property card plus its ranking fields.
+      properties:
+        zpid:
+          type: integer
+          nullable: true
+        address:
+          type: string
+        url:
+          type: string
+        photo_url:
+          type: string
+        price:
+          type: number
+          format: double
+          nullable: true
+        beds:
+          type: integer
+          nullable: true
+        baths:
+          type: integer
+          nullable: true
+        sqft:
+          type: integer
+          nullable: true
+        property_type:
+          type: string
+        status:
+          type: string
+        latitude:
+          type: number
+          format: double
+          nullable: true
+        longitude:
+          type: number
+          format: double
+          nullable: true
+        brokerage:
+          type: string
+        zestimate:
+          type: number
+          format: double
+          nullable: true
+        date_sold:
+          type: string
+        distance_miles:
+          type: number
+          format: double
+          nullable: true
+        similarity_score:
+          type: number
+          format: double
+          nullable: true
+      required:
+      - address
     TaxAssessment:
       type: object
       description: Serializer for the current tax assessment and parcel identifiers.
@@ -1752,3 +2056,12 @@ components:
           nullable: true
         currency:
           type: string
+tags:
+- name: Properties
+  description: Property search (by location, coordinates, map bounds, polygon, MLS
+    ID, URL or address) and per-property detail by zpid.
+- name: Agents
+  description: Real-estate agent profiles, reviews, and their for-sale, for-rent and
+    sold listings.
+- name: Utilities
+  description: Location autocomplete, apartment details, and health.

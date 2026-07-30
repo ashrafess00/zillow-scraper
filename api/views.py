@@ -3,6 +3,8 @@ API Views for the Zillow scraper.
 """
 
 import logging
+from functools import lru_cache
+
 from django.conf import settings
 from rest_framework import status, serializers
 from rest_framework.decorators import api_view
@@ -13,6 +15,7 @@ from drf_spectacular.types import OpenApiTypes
 from .serializers import (
     AgentSerializer,
     PropertySerializer,
+    SimilarHomeSerializer,
     ReviewSerializer,
     AutocompleteSuggestionSerializer,
     ApartmentDetailsSerializer,
@@ -28,6 +31,7 @@ from .serializers import (
     TaxAssessmentSerializer,
     NearbyAreasSerializer,
     ListingStatusSerializer,
+    MarketStatsSerializer,
     ErrorSerializer,
     PaginationMetadataSerializer,
 )
@@ -41,8 +45,17 @@ logger = logging.getLogger(__name__)
 DEFAULT_PER_PAGE = 40
 
 
+@lru_cache(maxsize=None)
 def get_paginated_response_schema(resource_serializer_class, name):
-    """Helper to generate paginated response schema."""
+    """
+    Helper to generate paginated response schema.
+
+    Cached per (serializer, name): `inline_serializer` mints a new class on every
+    call, so the nine endpoints that all ask for 'PaginatedPropertyResponse' used
+    to produce nine distinct components with the same name. drf-spectacular
+    emitted a collision warning for each and collapsed them — harmless, since
+    they were structurally identical, but it drowned out any genuine collision.
+    """
     return inline_serializer(
         name=name,
         fields={
@@ -732,8 +745,62 @@ def apartment_details(request):
 
 
 @extend_schema(
+    summary="Get market statistics for a region",
+    description=(
+        "Market statistics for a city, zipcode, neighborhood, county or state — "
+        "Zillow Home Value Index and its year-over-year change, median list and "
+        "sale prices, median days to pending, sale-to-list ratio, inventory, new "
+        "listings and median rent, plus the parent county / state / national "
+        "figures for context.\n\n"
+        "Zillow publishes listing and sale aggregates on separate monthly "
+        "cycles, so `listings_as_of` and `sales_as_of` are reported separately "
+        "rather than reconciled into one date.\n\n"
+        "Pass `history=true` for the monthly series behind these numbers "
+        "(home value index and rent go back ~100 months)."
+    ),
+    parameters=[
+        OpenApiParameter(
+            name='location', type=OpenApiTypes.STR, required=True,
+            description=(
+                'Region to look up: a slug (`austin-tx`), a place name '
+                '(`Austin, TX`), a zipcode (`90210`), a neighborhood '
+                '(`park-slope-brooklyn-ny`), a county (`travis-county-tx`) '
+                'or a state (`tx`).'
+            ),
+        ),
+        OpenApiParameter(
+            name='history', type=OpenApiTypes.BOOL,
+            description='Include the monthly time series (default false)',
+        ),
+    ],
+    responses={200: MarketStatsSerializer, 404: ErrorSerializer},
+    tags=['Properties']
+)
+@api_view(['GET'])
+def market_stats(request):
+    """Get market statistics for one region."""
+    location = request.query_params.get('location')
+
+    if not location:
+        return Response(
+            {'error': 'Bad Request', 'message': 'location is required', 'status_code': 400},
+            status=status.HTTP_200_OK
+        )
+
+    history = request.query_params.get('history', '').lower() in ('1', 'true', 'yes')
+
+    stats = property_scraper.get_market_stats(location, history=history)
+    return Response(MarketStatsSerializer(stats).data)
+
+
+@extend_schema(
     summary="Location autocomplete",
-    description="Get autocomplete suggestions for a location query.",
+    description=(
+        "Autocomplete suggestions for a location or address query. Region hits "
+        "carry `region_id`, `region_type` and coordinates; address hits carry a "
+        "`zpid` that can be passed straight to any detail endpoint. Returns an "
+        "empty list when nothing matches."
+    ),
     parameters=[
         OpenApiParameter(name='q', type=OpenApiTypes.STR, description='Search query', required=True),
     ],
@@ -958,11 +1025,19 @@ def schools(request):
 
 @extend_schema(
     summary="Get similar / nearby homes",
-    description="Comparable and nearby homes for a property by zpid.",
+    description=(
+        "Comparable homes near a property, closest comp first. Each result "
+        "carries `distance_miles` from the subject and a `similarity_score` "
+        "(lower is a closer match, weighing distance, size, beds, baths, price "
+        "and property type). `listType` defaults to the subject's own market, "
+        "so comps for a sold home are other sold homes."
+    ),
     parameters=[
         OpenApiParameter(name='zpid', type=OpenApiTypes.INT, description='Zillow Property ID', required=True),
+        OpenApiParameter(name='count', type=OpenApiTypes.INT, description='How many comps to return (1-40, default 8)'),
+        OpenApiParameter(name='listType', type=OpenApiTypes.STR, description='Comp market: for-sale, for-rent, sold. Defaults to the subject property\'s status.'),
     ],
-    responses={200: PropertySerializer(many=True), 404: ErrorSerializer},
+    responses={200: SimilarHomeSerializer(many=True), 404: ErrorSerializer},
     tags=['Properties']
 )
 @api_view(['GET'])
@@ -971,7 +1046,24 @@ def similar_homes(request):
     zpid, error = _get_zpid(request)
     if error:
         return error
-    return Response(PropertySerializer(property_scraper.get_similar_homes(zpid), many=True).data)
+
+    count, error = _get_float(request, 'count', 8, minimum=1, maximum=40)
+    if error:
+        return error
+
+    list_type = request.query_params.get('listType') or None
+    if list_type and list_type not in ('for-sale', 'for-rent', 'sold'):
+        return Response(
+            {'error': 'Bad Request',
+             'message': 'listType must be one of: for-sale, for-rent, sold',
+             'status_code': 400},
+            status=status.HTTP_200_OK
+        )
+
+    homes = property_scraper.get_similar_homes(
+        zpid, count=int(count), list_type=list_type
+    )
+    return Response(SimilarHomeSerializer(homes, many=True).data)
 
 
 ZPID_PARAM = OpenApiParameter(
@@ -1164,6 +1256,7 @@ def listing_status(request):
                 'version': serializers.CharField(),
                 'timestamp': serializers.CharField(),
                 'checks': serializers.DictField(),
+                'rapidapi': serializers.DictField(),
             }
         ),
     },
@@ -1196,11 +1289,34 @@ def health(request):
 
     overall = 'ok' if all(v == 'ok' for v in checks.values()) else 'degraded'
 
+    # RapidAPI gating fails open by design: with no secret set it enforces
+    # nothing and only observes. Report that observation here so the question
+    # "is RapidAPI actually sending the header yet?" can be answered with a curl
+    # rather than by grepping a worker's log history. Counts are per worker
+    # process, so poll a few times before concluding the header never arrives.
+    from core.middleware import RapidAPIOnlyMiddleware
+    rapidapi = {
+        'enforcing': bool(getattr(settings, 'RAPIDAPI_PROXY_SECRET', '')),
+        'requests_with_header': RapidAPIOnlyMiddleware.seen_with_header,
+        'requests_without_header': RapidAPIOnlyMiddleware.seen_without_header,
+    }
+    if not rapidapi['enforcing']:
+        if rapidapi['requests_with_header']:
+            rapidapi['advice'] = (
+                'Header is arriving — safe to set RAPIDAPI_PROXY_SECRET to enforce.'
+            )
+        else:
+            rapidapi['advice'] = (
+                'No header seen yet on this worker. Send traffic through the '
+                'RapidAPI listing and re-check before setting the secret.'
+            )
+
     return Response({
         'status': overall,
         'version': settings.SPECTACULAR_SETTINGS.get('VERSION', 'unknown'),
         'timestamp': datetime.now(dt_timezone.utc).isoformat(),
         'checks': checks,
+        'rapidapi': rapidapi,
     })
 
 
@@ -1217,15 +1333,21 @@ def debug_fetch(request):
     import requests
     
     url = request.query_params.get('url', 'https://www.zillow.com/professionals/real-estate-agent-reviews/los-angeles/')
-    
-    # First, show proxy configuration
-    proxies_config = settings.SCRAPER_SETTINGS.get('PROXIES', [])
+
+    # First, show proxy configuration.
     proxy_to_use = proxy_manager.get_proxy()
-    
+
+    # ProxyManager no longer keeps a `.proxies` list — it resolves a single URL
+    # per request from settings, picking the pool by request host. Reading the
+    # old attribute here raised AttributeError on every call.
+    def _redact(value):
+        return value[:30] + '...' if value and len(value) > 30 else value
+
     proxy_info = {
-        'proxies_configured': len(proxy_manager.proxies),
-        'proxies_list': [p[:30] + '...' if len(p) > 30 else p for p in proxy_manager.proxies],
-        'proxy_being_used': {k: v[:30] + '...' if v and len(v) > 30 else v for k, v in (proxy_to_use or {}).items()},
+        'proxies_configured': proxy_manager.get_proxy_count(),
+        'proxy_being_used': {
+            k: _redact(v) for k, v in (proxy_to_use or {}).items()
+        },
     }
     
     # Test proxy with a simple httpbin request first

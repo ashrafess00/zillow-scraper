@@ -23,7 +23,7 @@ DEXEC = $(COMPOSE) exec $(SERVICE)
 .DEFAULT_GOAL := help
 
 .PHONY: help build up up-fg down down-v restart ps logs shell django-shell \
-        migrate makemigrations superuser collectstatic test check health \
+        migrate makemigrations superuser collectstatic test check canary health \
         schema install dev dev-migrate dev-test clean
 
 help: ## Show this help
@@ -81,6 +81,9 @@ test: ## Run tests — make test ARGS=api.tests.ClassName.test_method
 
 check: ## Run Django's system checks (deployment settings included)
 	$(DEXEC) $(PYTHON) manage.py check --deploy
+
+canary: ## Hit real Zillow and report which scraper paths went empty (exit 1 on failure)
+	$(DEXEC) $(PYTHON) manage.py canary $(ARGS)
 
 schema: ## Write the OpenAPI schema to zillow-openapi-schema.yaml
 	$(DEXEC) $(PYTHON) manage.py spectacular --file zillow-openapi-schema.yaml

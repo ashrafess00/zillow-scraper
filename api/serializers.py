@@ -38,6 +38,105 @@ class PropertySerializer(serializers.Serializer):
     latitude = serializers.FloatField(required=False, allow_null=True)
     longitude = serializers.FloatField(required=False, allow_null=True)
     brokerage = serializers.CharField(required=False, allow_blank=True)
+    # Sold listings carry no sale price in Zillow's search index — these two are
+    # what make a sold result usable. See parse_property_card.
+    zestimate = serializers.FloatField(required=False, allow_null=True)
+    date_sold = serializers.CharField(required=False, allow_blank=True)
+
+
+class SimilarHomeSerializer(PropertySerializer):
+    """A comp from /similarHomes — a property card plus its ranking fields."""
+
+    distance_miles = serializers.FloatField(required=False, allow_null=True)
+    similarity_score = serializers.FloatField(required=False, allow_null=True)
+
+
+class MarketAncestorSerializer(serializers.Serializer):
+    """A region containing the one being described."""
+
+    name = serializers.CharField()
+    type = serializers.CharField(
+        required=False, allow_blank=True,
+        help_text="country, state, dma, cbsa, county or city",
+    )
+
+
+class MarketRegionSerializer(serializers.Serializer):
+    """The region a /marketStats response describes."""
+
+    id = serializers.IntegerField(required=False, allow_null=True)
+    name = serializers.CharField(required=False, allow_blank=True)
+    type = serializers.CharField(
+        required=False, allow_blank=True,
+        help_text="city, zipcode, neighborhood, county or state",
+    )
+    url = serializers.CharField(required=False, allow_blank=True)
+    slug = serializers.CharField(required=False, allow_blank=True)
+    parentage = MarketAncestorSerializer(
+        many=True, required=False,
+        help_text="Regions containing this one, widest first (country → state → county)",
+    )
+
+
+class MarketBenchmarkSerializer(serializers.Serializer):
+    """Parent-region figures that give a region's numbers context."""
+
+    county_home_value_index = serializers.FloatField(required=False, allow_null=True)
+    state_home_value_index = serializers.FloatField(required=False, allow_null=True)
+    national_home_value_index = serializers.FloatField(required=False, allow_null=True)
+    national_median_rent = serializers.FloatField(required=False, allow_null=True)
+
+
+class MarketSeriesPointSerializer(serializers.Serializer):
+    """One month of a market time series."""
+
+    date = serializers.CharField()
+    value = serializers.FloatField()
+
+
+class MarketHistorySerializer(serializers.Serializer):
+    """Monthly series, newest first. Only present when history=true."""
+
+    home_value_index = MarketSeriesPointSerializer(many=True, required=False)
+    median_rent = MarketSeriesPointSerializer(many=True, required=False)
+    median_days_to_pending = MarketSeriesPointSerializer(many=True, required=False)
+    median_sale_to_list_ratio = MarketSeriesPointSerializer(many=True, required=False)
+
+
+class MarketStatsSerializer(serializers.Serializer):
+    """Market statistics for a region."""
+
+    region = MarketRegionSerializer()
+    # Zillow publishes listing and sale aggregates on different monthly cycles,
+    # so each carries its own period end rather than being forced into one date.
+    listings_as_of = serializers.CharField(required=False, allow_blank=True)
+    sales_as_of = serializers.CharField(required=False, allow_blank=True)
+
+    home_value_index = serializers.FloatField(
+        required=False, allow_null=True,
+        help_text="Zillow Home Value Index (ZHVI) for the region",
+    )
+    home_value_index_yoy_pct = serializers.FloatField(
+        required=False, allow_null=True,
+        help_text="Year-over-year change in ZHVI, as a percentage (-5.02 = down 5.02%)",
+    )
+    median_list_price = serializers.FloatField(required=False, allow_null=True)
+    median_sale_price = serializers.FloatField(required=False, allow_null=True)
+    median_days_to_pending = serializers.FloatField(required=False, allow_null=True)
+    median_sale_to_list_ratio = serializers.FloatField(
+        required=False, allow_null=True,
+        help_text="A ratio, not a percentage: 0.98 means homes sell for 98% of list price",
+    )
+    pct_sold_above_list = serializers.FloatField(required=False, allow_null=True)
+    pct_sold_below_list = serializers.FloatField(required=False, allow_null=True)
+    for_sale_inventory = serializers.FloatField(required=False, allow_null=True)
+    new_listings = serializers.FloatField(required=False, allow_null=True)
+    median_rent = serializers.FloatField(
+        required=False, allow_null=True,
+        help_text="Zillow Observed Rent Index (ZORI)",
+    )
+    benchmarks = MarketBenchmarkSerializer()
+    history = MarketHistorySerializer(required=False)
 
 
 class ReviewSerializer(serializers.Serializer):
@@ -65,10 +164,22 @@ class PaginationMetadataSerializer(serializers.Serializer):
 
 class AutocompleteSuggestionSerializer(serializers.Serializer):
     """Serializer for autocomplete suggestions."""
-    
+
     display = serializers.CharField()
-    type = serializers.CharField()
+    type = serializers.CharField(help_text="'region' or 'address'")
     id = serializers.CharField(required=False, allow_blank=True)
+    city = serializers.CharField(required=False, allow_blank=True)
+    state = serializers.CharField(required=False, allow_blank=True)
+    # Region hits: feed region_id back into a search. Address hits: zpid goes
+    # straight to any of the detail endpoints.
+    region_id = serializers.IntegerField(required=False, allow_null=True)
+    region_type = serializers.CharField(required=False, allow_blank=True)
+    county = serializers.CharField(required=False, allow_blank=True)
+    zipcode = serializers.CharField(required=False, allow_blank=True)
+    zpid = serializers.IntegerField(required=False, allow_null=True)
+    address_type = serializers.CharField(required=False, allow_blank=True)
+    latitude = serializers.FloatField(required=False, allow_null=True)
+    longitude = serializers.FloatField(required=False, allow_null=True)
 
 
 class ApartmentDetailsSerializer(serializers.Serializer):
